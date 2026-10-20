@@ -1,0 +1,126 @@
+{
+  "parameters": [
+    "E_pa",
+    "nu",
+    "ground_friction",
+    "velocity_decay_rate_s_inv"
+  ],
+  "baseline": {
+    "E_pa": 3547.0699,
+    "nu": 0.278514,
+    "gripper_static_friction": 2.15827,
+    "gripper_sliding_friction": 0.770921,
+    "ground_friction": 0.853391,
+    "velocity_decay_rate_s_inv": 0.359543
+  },
+  "coordinate_scales": [
+    3547.0699,
+    0.4,
+    0.853391,
+    1.0
+  ],
+  "grid_levels": [
+    -0.025,
+    0.0,
+    0.025
+  ],
+  "coordinate_passes": 3,
+  "initial_guesses": [
+    [
+      0.025,
+      0.025,
+      0.025,
+      0.025
+    ],
+    [
+      -0.025,
+      -0.025,
+      -0.025,
+      -0.025
+    ]
+  ],
+  "truths": [
+    {
+      "name": "center",
+      "q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "mixed",
+      "q": [
+        0.025,
+        -0.025,
+        0.025,
+        -0.025
+      ]
+    }
+  ],
+  "fitting": {
+    "surface_samples": 1500,
+    "track_samples": 2000,
+    "surface_weight": 0.5,
+    "track_weight": 0.5,
+    "huber_delta_mm": 5.0,
+    "phase_weights": {
+      "before": 0.1,
+      "interaction": 0.45,
+      "release": 0.45
+    },
+    "surface_truth": "Same tracked canonical boundary material samples as prediction; synthetic observations, not RGB ground truth"
+  },
+  "teacher": {
+    "workpoints": [
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.025,
+        0.025,
+        0.025,
+        0.025
+      ],
+      [
+        -0.025,
+        -0.025,
+        -0.025,
+        -0.025
+      ],
+      [
+        0.025,
+        -0.025,
+        0.025,
+        -0.025
+      ],
+      [
+        -0.025,
+        0.025,
+        -0.025,
+        0.025
+      ]
+    ],
+    "radii": [
+      0.1,
+      0.05
+    ],
+    "refinement_radii": [
+      0.025,
+      0.0125
+    ],
+    "relative_column_tolerance": 0.25,
+    "windows_per_phase": 2,
+    "points": 256,
+    "source": "Fixed simulated state from known-truth continuous rollout; perturb only one query parameter; no truth state resets in any fitted rollout",
+    "target": "Phase-weighted RMS endpoint tracked-motion derivative in mm per normalized parameter, 1 observation interval; raw motion, no residual-dependent IRLS weighting",
+    "mapping": "S/(S+tau_j), common training-only median scale per parameter; four independent scores",
+    "vectors_saved": true,
+    "missing": "NaN plus per-parameter mask, never zero"
+  },
+  "query_step": 0.025
+}

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "softdynamics"
+version = "0.1.0"
+description = "Interaction-conditioned physical parameter sensitivity for deformable dynamics"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10", "torch>=2.2"]
+
+[project.optional-dependencies]
+physics = ["warp-lang==1.8.1", "jaxtyping", "trimesh", "scikit-image", "plyfile"]
+test = ["pytest>=8"]
+
+[project.scripts]
+softdynamics-pretrain = "softdynamics.pretrain:main"
+softdynamics-features = "softdynamics.features:main"
+softdynamics-train = "softdynamics.training:main"
+softdynamics-predict = "softdynamics.inference:main"
+softdynamics-teacher = "softdynamics.teacher:main"
+softdynamics-search = "softdynamics.search:main"
+softdynamics-prepare = "softdynamics.data:main"
+softdynamics-weights = "softdynamics.weights:main"
+
+[tool.setuptools.packages.find]
+include = ["softdynamics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

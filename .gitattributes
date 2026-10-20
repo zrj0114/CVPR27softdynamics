@@ -1,0 +1,2 @@
+# Keep the vendored EMPM snapshot byte-identical, including upstream whitespace.
+runtime/empm/** -whitespace
