@@ -24,7 +24,7 @@ def main():
     checkpoint = torch.load(args.encoder, map_location='cpu', weights_only=True)
     if not checkpoint.get('use_actions', checkpoint.get('variant', 'actions') == 'actions'):
         raise ValueError('Four-parameter confidence uses the actions-enabled encoder')
-    encoder = CausalMotion(actions=True).to(args.device)
+    encoder = CausalMotion(actions=True, action_dim=checkpoint.get('action_dim',28)).to(args.device)
     encoder.load_state_dict(checkpoint['model'])
     encoder.eval()
     query_step = read_json(args.config)['query_step']

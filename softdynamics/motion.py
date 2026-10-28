@@ -6,6 +6,27 @@ from torch import nn
 PAST=16
 FUTURE=16
 
+def relative_actions(action, anchor):
+    """Legacy EEF rebasing; corrected pads retain their object-relative poses.
+
+    Pad coordinates are already normalized around the initial object. Rebasing
+    each pad independently would remove the gap and its location on the object.
+    """
+    if action.shape[-1] == 52:
+        return action.clone()
+    if action.shape[-1] == 28:
+        count, stride, validity = 2, 14, 13
+    else:
+        raise ValueError('Unknown action schema')
+    action = action.clone()
+    for g in range(count):
+        mat = action[:,g*stride:g*stride+12].reshape(-1,3,4)
+        r0, t0 = mat[anchor,:,:3].clone(), mat[anchor,:,3].clone()
+        mat[:,:,:3] = mat[:,:,:3]@r0.T-torch.eye(3,device=mat.device)
+        mat[:,:,3] -= t0
+        mat *= action[:,g*stride+validity,None,None]
+    return action
+
 def make_batch(data,keys,rng,points=128,starts=None):
     rows=[];truth=[];masks=[];scale=[]
     for row,key in enumerate(keys):
@@ -20,13 +41,7 @@ def make_batch(data,keys,rng,points=128,starts=None):
         velocity=(past[-1]-past[-3])/dt
         observed=v[PAST-1]&v[PAST-3]
         velocity=torch.where(observed[:,None],velocity,0.)
-        action=d['actions'][start:start+PAST+FUTURE].clone()
-        for g in range(2):
-            mat=action[:,g*14:g*14+12].reshape(-1,3,4)
-            r0=mat[PAST-1,:,:3].clone();t0=mat[PAST-1,:,3].clone()
-            mat[:,:,:3]=mat[:,:,:3]@r0.T-torch.eye(3,device=mat.device)
-            mat[:,:,3]-=t0
-            mat*=action[:,g*14+13,None,None]
+        action=relative_actions(d['actions'][start:start+PAST+FUTURE], PAST-1)
         rows.append(dict(past=past,valid=v[:PAST],geometry=d['geometry'][ids],
             anchor=anchor,velocity=velocity,actions=action,
             past_times=t[:PAST]-t[PAST-1],future_times=t[PAST:]-t[PAST-1]))
@@ -34,11 +49,11 @@ def make_batch(data,keys,rng,points=128,starts=None):
     return {k:torch.stack([r[k] for r in rows]) for k in rows[0]},torch.stack(truth),torch.stack(masks),torch.stack(scale)
 
 class CausalMotion(nn.Module):
-    def __init__(self,actions=True):
-        super().__init__();self.use_actions=actions
+    def __init__(self,actions=True,action_dim=28):
+        super().__init__();self.use_actions=actions;self.action_dim=action_dim
         self.point=nn.Sequential(nn.Linear(23,64),nn.GELU(),nn.Linear(64,64),nn.GELU())
         self.history=nn.GRU(64,64,batch_first=True)
-        self.action=nn.Sequential(nn.Linear(29,64),nn.GELU(),nn.Linear(64,64))
+        self.action=nn.Sequential(nn.Linear(action_dim+1,64),nn.GELU(),nn.Linear(64,64))
         self.action_history=nn.GRU(64,64,batch_first=True)
         self.global_point=nn.Linear(128,64)
         self.decoder=nn.Sequential(nn.Linear(64+64+64+15+3+2,128),nn.GELU(),nn.Linear(128,64),nn.GELU(),nn.Linear(64,3))

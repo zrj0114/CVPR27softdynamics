@@ -3,156 +3,333 @@
     "file": "softdynamics/motion.py",
     "source": "deform360_confidence_pretrain_20261019/causal_motion.py",
     "source_sha256": "1b7f423852643b443ee3370f3c1bade72a551935d0d1721f15d45c0fb27f1890",
-    "packaging_modified": false
+    "packaging_modified": true,
+    "release_sha256": "71d153913d6161931808e6bbb4005e8cb2e6c345b5991e360fd1894673968d3e",
+    "release_note": "Retains corrected-release 52-D pad actions and legacy 28-D EEF compatibility"
   },
   {
     "file": "softdynamics/inference.py",
     "source": "deform360_known_parameter_validation_20261020/serving/predict.py",
     "source_sha256": "8f88568a003a0bfb70855774633ba4573eb3b0f50dd654b93edfc5f2759a969e",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "a89007f931e30a84958ed625250ce2244a6768369532ca5f3ffcb5669f50fdcd"
   },
   {
     "file": "softdynamics/labels.py",
     "source": "deform360_confidence_pretrain_20261019/teacher_labels.py",
     "source_sha256": "4b1eb97a980fc5a907c1f7c1324aa5ecc25bbfcdc05f1faf885c602d41330387",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "4b1eb97a980fc5a907c1f7c1324aa5ecc25bbfcdc05f1faf885c602d41330387"
   },
   {
     "file": "runtime/registration.py",
     "source": "empm_deterministic_transfer_20261013/runtime/registration.py",
     "source_sha256": "877b66fa4ca195bc157f3de1d26d2c3ed2ff178cfc9baa25b826b5ee92823c2e",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "877b66fa4ca195bc157f3de1d26d2c3ed2ff178cfc9baa25b826b5ee92823c2e"
   },
   {
     "file": "runtime/physical_asset.py",
     "source": "empm_deterministic_transfer_20261013/runtime/physical_asset.py",
     "source_sha256": "b38027a64305bfd768e33746c6ec53483afa30f0fa3778a15b6bf0f80d7d866d",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "b38027a64305bfd768e33746c6ec53483afa30f0fa3778a15b6bf0f80d7d866d"
   },
   {
     "file": "runtime/gs-layer/gaussian_io.py",
     "source": "empm_deterministic_transfer_20261013/runtime/gs-layer/gaussian_io.py",
     "source_sha256": "bd7464320efbad2be4054877a852d8aecdd7e26c95ab9cd8dc40734ac9076c79",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "bd7464320efbad2be4054877a852d8aecdd7e26c95ab9cd8dc40734ac9076c79"
   },
   {
     "file": "runtime/gs-layer/material_contact_kernels.py",
     "source": "empm_deterministic_transfer_20261013/runtime/gs-layer/material_contact_kernels.py",
     "source_sha256": "4c28c2085da2a35d24e17c27252711d7c7ce4f0078e202bc55b59654b19a5629",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "4c28c2085da2a35d24e17c27252711d7c7ce4f0078e202bc55b59654b19a5629"
   },
   {
     "file": "runtime/gs-layer/deterministic_transfer.py",
     "source": "empm_deterministic_transfer_20261013/runtime/gs-layer/deterministic_transfer.py",
     "source_sha256": "b8349799bceec987e48cd5217ecce32a9d93293837e354b8b16d24d8977af57b",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "b8349799bceec987e48cd5217ecce32a9d93293837e354b8b16d24d8977af57b"
   },
   {
     "file": "runtime/empm/phys_sim/diff_simulator/warp_mpm/mpm_data_structure.py",
     "source": "empm_deterministic_transfer_20261013/runtime/empm/phys_sim/diff_simulator/warp_mpm/mpm_data_structure.py",
     "source_sha256": "51490cf21c43741f364330373eae486c8f5327bd4eca443854d621a9759b48f6",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "51490cf21c43741f364330373eae486c8f5327bd4eca443854d621a9759b48f6"
   },
   {
     "file": "runtime/empm/phys_sim/diff_simulator/warp_mpm/mpm_solver_diff.py",
     "source": "empm_deterministic_transfer_20261013/runtime/empm/phys_sim/diff_simulator/warp_mpm/mpm_solver_diff.py",
     "source_sha256": "466c9863e39b957b5d20523e33a5eff5f31e9c1c57c6621ca4bbcf2629fd320f",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "466c9863e39b957b5d20523e33a5eff5f31e9c1c57c6621ca4bbcf2629fd320f"
   },
   {
     "file": "runtime/empm/phys_sim/diff_simulator/warp_mpm/mpm_utils.py",
     "source": "empm_deterministic_transfer_20261013/runtime/empm/phys_sim/diff_simulator/warp_mpm/mpm_utils.py",
     "source_sha256": "730618177324379caddd4c1a791d9c19c38c1b9bf34a9672978319cdc48a24e7",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "730618177324379caddd4c1a791d9c19c38c1b9bf34a9672978319cdc48a24e7"
   },
   {
     "file": "runtime/empm/phys_sim/diff_simulator/warp_mpm/warp_utils.py",
     "source": "empm_deterministic_transfer_20261013/runtime/empm/phys_sim/diff_simulator/warp_mpm/warp_utils.py",
     "source_sha256": "95ab401d3f5c4a00d58b695c44b24040bd18b4e3b10b6bb99b00916a559ef3b1",
-    "packaging_modified": false
+    "packaging_modified": false,
+    "release_sha256": "95ab401d3f5c4a00d58b695c44b24040bd18b4e3b10b6bb99b00916a559ef3b1"
   },
   {
     "file": "runtime/gs-layer/benchmark_mpm_cpu.py",
     "source": "empm_deterministic_transfer_20261013/runtime/gs-layer/benchmark_mpm_cpu.py",
     "source_sha256": "72989f2ec8aa02ac451f82281f6b15cf8a73c7b475e39d6ba1ad9afe84548bc5",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "a5a0057d7c79dab41a6b4f31b7ea96f785102e3e19a8cd3609a175b01e5acb5c"
   },
   {
     "file": "runtime/run_episode.py",
     "source": "empm_deterministic_transfer_20261013/runtime/run_episode.py",
     "source_sha256": "d248baf59bcbc278a2c9ade4fe705be2be4bdd7fa4c03827aaa40106bc14c1a3",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "1126a1cf3d121e043c688ce89686f1907b54092902c294ba4d7bedda60ffe389"
   },
   {
     "file": "runtime/build_asset.py",
     "source": "empm_deterministic_transfer_20261013/runtime/build_asset.py",
     "source_sha256": "113552ae55373b596fe792e966873dbcf02f2e805179f2570ba701d258ca3c60",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "0283e19e3d65bc5a108a3b98e659c325b36e83f2fa4777587610c97de05908be"
   },
   {
     "file": "runtime/build_queries.py",
     "source": "empm_deterministic_transfer_20261013/runtime/build_queries.py",
     "source_sha256": "e8abbea301a56c31abf9f59b453de09adf2ee607c710ec477dcf810d8a69c7f9",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "558d3d875083c343d5a4369c434756eb1f677ac031c689fb413e1a0776bd5a4e"
   },
   {
     "file": "softdynamics/adapters/empm.py",
     "source": "deform360_confidence_pretrain_20261019/short_branch_runtime.py",
     "source_sha256": "92492f0c7529c9a64ae390376ca27f8494657c0ef59d1e3f664dcf062db0bbb7",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "dfd3aa23e1fc8506c654b7d8a1527925a3f8e81289b5720ff5ac64ab3cc714bb"
   },
   {
     "file": "softdynamics/teacher.py",
     "source": "deform360_known_parameter_validation_20261020/teacher.py",
     "source_sha256": "0022006c41ac6b8eed64156ee72b30c5aa8dd28b39bd581e711aa8a88db44ce3",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "831ca290e512b643be706ce531e185fb9b9d02a2944ea72d8ad1464e58a23462"
   },
   {
     "file": "softdynamics/objective.py",
     "source": "deform360_known_parameter_validation_20261020/objective.py",
     "source_sha256": "d212294aeb3b23cbd5fc41997fd473821afadba68de726325d9e2085eefbaa94",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "f55d675ba30627c3a66b63a3b1dd379e6e57bb8d36a350af9e5b4cc58d2b112f"
   },
   {
     "file": "softdynamics/search.py",
     "source": "deform360_known_parameter_validation_20261020/recover.py",
     "source_sha256": "c4f826b087668f968a890428f7ff532c9997f8a2a8ab993aef14197d210f8e7a",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "4b7c79023035f03752a6559ea06f4651ad3e97f8cec591b1c61f620db2dce90b"
   },
   {
     "file": "softdynamics/training.py",
     "source": "deform360_known_parameter_validation_20261020/train.py",
     "source_sha256": "ce5de9dff0b654eca57c45097572991cbaabbbb29541ed808706c640181e9dae",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "b4725b3bf4db39ca4584eebd97836b1e45f73b65576a5cb55b7d2d2ada54fdf5"
   },
   {
     "file": "softdynamics/pretrain.py",
     "source": "deform360_confidence_pretrain_20261019/train_causal.py",
     "source_sha256": "9ac368c6ac54a343a5d84545dd51d384112b54ab3bdf8b56c30696ff2254d02a",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "326906285b8bd754bf2a0eeb0ec32714f4e2e9f21e325adec704a711a2015c3b"
   },
   {
     "file": "softdynamics/data.py",
     "source": "deform360_confidence_pretrain_20261019/prepare_causal.py",
     "source_sha256": "15c449f8b4090933bebc1ca25c6515541ba9144b32090203bf283a5dd0334f10",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "4f5af9372928daacaeccf48c7572b379e02b571dcf29426c5474226d6223fab7"
   },
   {
     "file": "softdynamics/weights.py",
     "source": "deform360_known_parameter_validation_20261020/weights.py",
     "source_sha256": "0505976855dc3739deef1d48d04fd1d393b751e9f27833843aac20fa3d3b8e35",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "5591716388dcec9b6c10ca10bfcf1ad5fb8db3cd1323ebe783e01832528502f4"
   },
   {
     "file": "softdynamics/rollouts.py",
     "source": "deform360_known_parameter_validation_20261020/simulation.py",
     "source_sha256": "3bfe89ef1d346c33f798ffb91340fa6c1911e1bc99e33374b0267294387ffdc5",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "754264a0fc5a1af6cd78721cbd39ebf816bb3d004b26f8534b68f3a1ef77b3c1"
   },
   {
     "file": "softdynamics/features.py",
     "source": "deform360_known_parameter_validation_20261020/features.py",
     "source_sha256": "bb390a7262299f084470ab03aee023b81f875cc17be9635dce8f7d57a8334a7f",
-    "packaging_modified": true
+    "packaging_modified": true,
+    "release_sha256": "d782d6b3898ec1778e1d40520eacb518236aefacc77d3d420289300bc6594ced"
+  },
+  {
+    "file": "softdynamics/__init__.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "0e3c0cb35929ea568c81c2e5f3d8df07aadd0e143fbc65a91b52263f7df6c592",
+    "packaging_modified": false,
+    "release_sha256": "0e3c0cb35929ea568c81c2e5f3d8df07aadd0e143fbc65a91b52263f7df6c592"
+  },
+  {
+    "file": "softdynamics/adapters/__init__.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "4dc34fe2c59d1e6d0011c7c32299a3e91b7448e0fe378fc87217bde8e4f36754",
+    "packaging_modified": false,
+    "release_sha256": "4dc34fe2c59d1e6d0011c7c32299a3e91b7448e0fe378fc87217bde8e4f36754"
+  },
+  {
+    "file": "softdynamics/adapters/pad_empm.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "863d8ea2abeba99036342c9e436c2341342437e89a9c4cca5e9e36891a7cb850",
+    "packaging_modified": false,
+    "release_sha256": "863d8ea2abeba99036342c9e436c2341342437e89a9c4cca5e9e36891a7cb850"
+  },
+  {
+    "file": "softdynamics/cma_benchmark.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "02c9d1d6ee8085f3fca315e12182bf9edc3152cea502ad457a37c81d9df26988",
+    "packaging_modified": true,
+    "release_sha256": "fba368672f4da51eb0400ed8b718882b5d8b56141bbe536e0a206ca3b34d6936"
+  },
+  {
+    "file": "softdynamics/cma_search.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "af165a440892b0e991314b01f68bdf292fdc756585342da7ac91c7c6b3419a23",
+    "packaging_modified": false,
+    "release_sha256": "af165a440892b0e991314b01f68bdf292fdc756585342da7ac91c7c6b3419a23"
+  },
+  {
+    "file": "softdynamics/evaluation_metrics.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "f84f7ce0bb2de66205d399b20eb7417b7c6261e2c8f71d114e0f990bd38ee984",
+    "packaging_modified": false,
+    "release_sha256": "f84f7ce0bb2de66205d399b20eb7417b7c6261e2c8f71d114e0f990bd38ee984"
+  },
+  {
+    "file": "softdynamics/io.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "65f8735c22b2e8ef804d0e05f01931e44bd5c8e298c823f25aff5f98e1f8fe70",
+    "packaging_modified": false,
+    "release_sha256": "65f8735c22b2e8ef804d0e05f01931e44bd5c8e298c823f25aff5f98e1f8fe70"
+  },
+  {
+    "file": "softdynamics/parameters.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "1e3007e1938715af5150d7813c3dcb0a29c4acfd77ded1a7a402e9a1e3bce7f3",
+    "packaging_modified": false,
+    "release_sha256": "1e3007e1938715af5150d7813c3dcb0a29c4acfd77ded1a7a402e9a1e3bce7f3"
+  },
+  {
+    "file": "softdynamics/recovery_benchmark.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "d1b07e9a8b803e29e63c7f277f3af7e7bde470a86ffda235170f47323f6faf9c",
+    "packaging_modified": false,
+    "release_sha256": "d1b07e9a8b803e29e63c7f277f3af7e7bde470a86ffda235170f47323f6faf9c"
+  },
+  {
+    "file": "softdynamics/recovery_data.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "cb7431bff5004f5557610dae41624c8d5309ae152240647285d5a1e59106b390",
+    "packaging_modified": false,
+    "release_sha256": "cb7431bff5004f5557610dae41624c8d5309ae152240647285d5a1e59106b390"
+  },
+  {
+    "file": "softdynamics/recovery_efficiency.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "efd96acdeb69d8253ef98c21fff40b7297793ed58f5016b0aeb13dbb1c20655d",
+    "packaging_modified": false,
+    "release_sha256": "efd96acdeb69d8253ef98c21fff40b7297793ed58f5016b0aeb13dbb1c20655d"
+  },
+  {
+    "file": "softdynamics/recovery_report.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "44dee5098def0fdffbb53fcb3daee0e330ea123d33559f7d620c21b785c785f4",
+    "packaging_modified": false,
+    "release_sha256": "44dee5098def0fdffbb53fcb3daee0e330ea123d33559f7d620c21b785c785f4"
+  },
+  {
+    "file": "softdynamics/render_evaluation.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "82e5dadffe659d0b0addf4f084119fb91bdd7c235b308e385af80fbb16a925c8",
+    "packaging_modified": true,
+    "release_sha256": "e68ca0f5bf4838ec1358160ed411d124bf5423934eee0b3688fe1d6d4d343f55"
+  },
+  {
+    "file": "softdynamics/shared_data.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "cff6b84bb930067c018c69699bce147f4f4059edf4c310cc8e61d00ad29f9841",
+    "packaging_modified": false,
+    "release_sha256": "cff6b84bb930067c018c69699bce147f4f4059edf4c310cc8e61d00ad29f9841"
+  },
+  {
+    "file": "softdynamics/shared_pipeline.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "a451ca2bd35b05bd9fe54804acc093538c127583594e60dc3eb6884b419f9652",
+    "packaging_modified": false,
+    "release_sha256": "a451ca2bd35b05bd9fe54804acc093538c127583594e60dc3eb6884b419f9652"
+  },
+  {
+    "file": "softdynamics/shared_teacher.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "f2156e2e14856beb463a16d1e9b7589ffe210ae92b45fd0babeedf51f7d7b58d",
+    "packaging_modified": false,
+    "release_sha256": "f2156e2e14856beb463a16d1e9b7589ffe210ae92b45fd0babeedf51f7d7b58d"
+  },
+  {
+    "file": "softdynamics/shared_training.py",
+    "source": "CVPR27softdynamics existing first-contribution working code, 2026-10-28",
+    "source_sha256": "6f1758eba32d2b9d8bda0ae8b7ee638baff575221b7621552c209a39dc43a0b6",
+    "packaging_modified": false,
+    "release_sha256": "6f1758eba32d2b9d8bda0ae8b7ee638baff575221b7621552c209a39dc43a0b6"
+  },
+  {
+    "file": "runtime/gs-layer/pad_contact_kernels.py",
+    "source": "CVPR27softdynamics corrected-release contact implementation, 2026-10-20",
+    "source_sha256": "42b4235079010ef63d3b826029fb8ff71340e1b859a6bfb93f1998f373345b3b",
+    "packaging_modified": false,
+    "release_sha256": "42b4235079010ef63d3b826029fb8ff71340e1b859a6bfb93f1998f373345b3b"
+  },
+  {
+    "file": "runtime/prepare_legacy.py",
+    "source": "empm_original_logic_20261012",
+    "packaging_modified": true,
+    "source_files": {
+      "prepare_inputs.py": "ff65983ac93058edf2628ceb0c126098de0802e536e59a90f6112c91f1763fe0",
+      "gs-layer/prepare_bilateral_inputs.py": "f3113280e67b7a66d762e7889fe6d1036bb86ad61bd8e175e03cc6e6056132f8",
+      "gs-layer/calibrate_bilateral_gripper.py": "48e3d02128dd4e7317e864d57c4bf932fb868095db1ed538c389f2314eb2a9a1"
+    },
+    "unchanged_functions": [
+      {
+        "function": "object_volume",
+        "source": "gs-layer/prepare_bilateral_inputs.py",
+        "unchanged_source_sha256": "0a9bd1696b51c5c46c7e7cc7a069347c299c242fc180dcb27175cb8b2c81d787"
+      },
+      {
+        "function": "cameras",
+        "source": "gs-layer/calibrate_bilateral_gripper.py",
+        "unchanged_source_sha256": "65439ac1ad6d1e3f52b73c1471b7a27e481f1dc74102d967dafc3fa3ab3a353e"
+      }
+    ],
+    "adaptation": "Retain original camera and volume functions; add explicit input paths and repaired-action packaging; omit obsolete calibration and diagnostics",
+    "release_sha256": "3d5bf32bebd11fbe83d93b2a7c3f4142a421e2a6dbc8b7990fddfb21e9f389bf"
   }
 ]

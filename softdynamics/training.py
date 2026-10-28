@@ -125,7 +125,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     torch.save(dict(encoder=encoder['model'], heads=heads, parameters=list(PARAMETERS),
                     base=torch.tensor([space.base[k] for k in PARAMETERS], dtype=torch.float64),
-                    scales=torch.tensor(space.scales), tau=heads[0]['tau'], query_step=config['query_step']),
+                    scales=torch.tensor(space.scales), tau=heads[0]['tau'], query_step=config['query_step'],
+                    action_dim=encoder.get('action_dim',28)),
                args.output/'model.pt')
     write_json(args.output/'training.json', dict(train_episodes=sorted(set(groups[train])),
                validation_episodes=args.validation, test_episodes=args.test, seeds=records,

@@ -1,121 +1,123 @@
 # CVPR27softdynamics
 
-面向 Deform360 交互的物理参数敏感度学习与参数优化。此仓库整理了当前实验实际使用的核心算法，去除了旧实验目录依赖、结果网页和作业管理脚本。
+整理已实现的 **初始 real2sim 流程 + 第一创新点：交互条件下的物理参数敏感度学习与加权参数辨识**。
 
-四个输出依次是 **杨氏模量 E、泊松比 ν、地面摩擦、速度衰减率**。每个输出独立，比较同一个物体的不同交互对同一参数的敏感程度；不使用触觉，不做跨参数 softmax。
+同一物体共用 canonical asset，各段交互仅用各自首帧配准初态。模型对每段交互输出四个独立分数：**杨氏模量 E、泊松比 ν、地面摩擦、速度衰减率**。优化某个参数时，在同一物体的不同交互之间使用对应的那一列权重；不使用触觉，不做跨参数 softmax。
 
-## 代码结构
+```text
+初帧 Gaussian + 多视角首帧轮廓 + 已测夹爪动作
+  → 共享材料 asset + 每段初态 → EMPM 完整前向模拟
+  → 离线有限差分敏感度标签 → 运动编码器预训练 + 四个独立预测头
+  → 冻结置信度模型 → 按参数加权 CMA-ES → 留出交互评测
+```
 
-| 路径 | 功能 |
-|---|---|
-| `softdynamics/data.py` | 固定点轨迹、初始几何和 EEF 动作的归一化；跟踪点材料绑定 |
-| `softdynamics/motion.py`, `pretrain.py` | 历史运动编码器、未来动作条件预测、按物体划分预训练 |
-| `softdynamics/teacher.py`, `labels.py` | 完整状态恢复、短窗中央差分、步长稳定性检查、缺失标签掩码 |
-| `softdynamics/features.py`, `training.py` | 冻结编码器、四个独立预测头、整段交互划分、训练集尺度校准 |
-| `softdynamics/inference.py` | 无需教师或模拟器的模型推理 |
-| `softdynamics/weights.py`, `search.py` | 固定参数级交互权重、等权/常数/教师/打乱/模型对照、循环坐标搜索 |
-| `softdynamics/rollouts.py`, `objective.py` | 完整物理模拟、缓存、多卡分配和表面/跟踪误差评分 |
-| `runtime/` | 共享 canonical asset、每段初态配准、接触与确定性 EMPM 前向模拟 |
-| `configs/croissant_four_parameters.json` | 当前牛角包局部实验的物理尺度、窗口和搜索配置 |
-
-此版本没有新增模型结构或更换物理公式。主要变化是显式传入路径、移除旧缓存依赖、合并可复用接口。完整实验集群的调度器不在仓库内；搜索入口按需运行所访问的候选，共用实际轨迹缓存。
+数据、资产、教师标签、训练权重和实验输出不包含在代码仓库中。首帧 Gaussian、掩码、相机和动作来自已有的 Deform360 数据处理结果；本仓库不重新实现上游 Gaussian 训练或夹爪标定。
 
 ## 安装
+
+建议从源码 checkout 以 editable 模式安装，Python >=3.10。物理模拟需要与驱动匹配的 PyTorch/CUDA，Warp 固定为 1.8.1。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e '.[test]'
-# 生成物理标签、构建资产或执行真实仿真时额外安装：
-pip install -e '.[physics]'
+pip install -e '.[physics,deform360,search,report,test]'
 pytest -q
 ```
 
-建议 Python 3.10 以上。物理环境需安装匹配显卡驱动的 PyTorch/CUDA，Warp 固定为 1.8.1。`runtime/` 从源码 checkout 使用；普通模型训练和推理只依赖安装后的 `softdynamics` 包。
+六项指标中的 Gaussian 渲染另需安装外部 EMPM checkout 的 rasterizer、SSIM 和 LPIPS 依赖，见[评测说明](docs/six_metric_evaluation.md)。`runtime/` 从源码 checkout 使用；普通神经网络推理只依赖 `softdynamics` 包。
 
-## 从数据到模型
+## 两个已有物理运行版本
 
-数据集、资产、模型权重、教师标签和运行结果均不随代码上传。真实数据和合成运动都需保留固定点对应关系。字段与准备步骤见 [数据接口](docs/data_contract.md)。
+| 使用场景 | 入口 | 输入与接触 |
+|---|---|---|
+| 原始牛角包共享资产实验 | `runtime/prepare_legacy.py`, `build_asset.py`, `build_queries.py`, `run_episode.py`; `adapters/empm.py` | 旧版测量的 marker 位姿、固定材料接触标签、50×36 mm 接触面；参考 episode 5 |
+| 清洗版数据的全量第一创新点 | `shared_data.py`, `shared_teacher.py`; `adapters/pad_empm.py` | 修正相机、独立指垫中心位姿、64×25 mm 接触面；各物体最早的候选段作参考 |
 
-### 1. 准备编码器输入
+两者共用 FCR/MPM 求解核心，但接触坐标、尺寸、材料接触资格及网格设定有区别。历史约 3.19 mm 是旧牛角包实验特定协议的结果，不能直接作为清洗版多物体或其他指标的结果。复现时保留同一套 asset、初态、动作、参数、接触版本和评分定义。
 
-```bash
-softdynamics-prepare --input data/raw_episode.npz \
-  --body data/workspace/asset/body.npz \
-  --initial-state data/workspace/initial_states/episode_0.npz \
-  --output data/normalized/episode_0.npz
-```
+原始初始化与运行命令见 [runtime/README.md](runtime/README.md)。历史 28 维 EEF 编码器、教师与三档坐标搜索接口见[历史敏感度流程](docs/legacy_sensitivity.md)。
 
-`raw_episode.npz` 包含米制 `tracks`、可见性 `visible`、官方 EEF `poses`、开口 `openings` 和秒制 `times`。物理接触需要的双指位姿是另外一个输入，不能用 EEF 位姿直接替代。
+## 当前第一创新点：从清洗数据到加权 CMA-ES
 
-### 2. 预训练运动编码器
+### 1. 数据准备、离线标签与训练
 
-预训练清单是一组 `{"id":"object/episode", "object":"object", "path":"relative/episode.npz"}`。相对路径以清单文件目录为起点。
+`SOURCE` 是包含 `物体/episode_N` 的 processed 数据目录，`CORRECTED` 是已洗好的相机和独立指垫交付目录。输出使用新目录，源数据只读。
 
 ```bash
-softdynamics-pretrain --manifest data/pretrain.json \
-  --heldout-object 121-croissant-plush --output runs/pretrain --device cuda:0
+SOURCE=/path/to/processed
+CORRECTED=/path/to/corrected_release
+PRETRAIN=/path/to/pretrain_run
+
+python -m softdynamics.shared_data --select-only \
+  --source "$SOURCE" --corrected "$CORRECTED" \
+  --config configs/corrected_release_pretrain.json --output "$PRETRAIN"
+python -u -m softdynamics.shared_pipeline --root "$PRETRAIN" \
+  --gpus 0 1 --prep-workers 4
 ```
 
-固定训练预算后才读取留出物体并评价；未来物体观测只作为监督目标，未来控制动作可以输入网络。当前实验的编码器用 sponge/bear 预训练，croissant 没有参与编码器预训练。
+这条流程完成首帧多视角体积构建、共享资产与各段初态、教师标签、运动编码器预训练和四个独立预测头训练。模型按物体划分；同一物体的所有交互、真值和工作点同组。输出模型为 `training/full/model.pt`。已有完整预训练目录可以直接用于下一步。
 
-### 3. 离线生成敏感度教师
+教师固定完整中间状态，逐一扰动物理参数，通过中央差分计算短窗运动导数，并用两组步长检查可靠性。网络学习 `log1p(S/tau)`，推理映射为 `S/(S+tau)`；`tau` 仅由训练数据确定。详细字段、筛选和失败处理见[清洗版预训练说明](docs/corrected_release_pretrain.md)。
+
+### 2. 冻结模型，准备同物体多交互参数辨识
 
 ```bash
-softdynamics-teacher --config configs/croissant_four_parameters.json \
-  --workspace data/workspace --episode 0 --truth center \
-  --observation data/observations/episode_0.npz \
-  --metadata data/observations/episode_0.json \
-  --output runs/teachers/center/episode_0 --device cuda:0
+RECOVERY=/path/to/recovery_inputs
+python -m softdynamics.recovery_data --mode prepare \
+  --root "$RECOVERY" --pretrain "$PRETRAIN"
 ```
 
-先用已知参数连续模拟真实初态和控制动作，再保存完整中间状态。在交互前/中/释放后各选两个窗口，每次只扰动一个参数、推进一个观测间隔；合成 phase-weighted RMS 运动导数。粗细步长不一致时细化，仍不可靠的标签保存为 NaN 和掩码。输出含每个工作点的 `S`、`valid`、`q` 和 Jacobian。
+读取第一步实际生成的 `training/full/model.pt`，保存模型与资产哈希。各物体的拟合交互和查询交互在搜索前冻结。这里准备的是完整轨迹拟合及评测输入，不需要先跑完旧三档搜索。
 
-对于当前牛角包数据，episode 4/6/7/8/9 使用 `--padding 64`；其他物体的域大小需要自行配置。参数基准和尺度不能直接通用于全部物体。生成程序支持的快照契约是 elastic FCR，其他材料不能直接套用。
-
-### 4. 提取特征并训练独立预测头
-
-特征清单每行包含 `episode_id`、`input` 和 `teacher`，例如 `{"episode_id":"croissant/0", "input":"normalized/episode_0.npz", "teacher":"teachers/episode_0/workpoint_0.npz"}`。同一交互的所有真值、窗口和参数工作点必须使用相同 `episode_id`，避免划分泄漏。
+### 3. Ours + CMA-ES，与等权严格配对
 
 ```bash
-softdynamics-features --manifest data/features.json --encoder runs/pretrain/encoder.pt \
-  --config configs/croissant_four_parameters.json --output data/features.npz
-softdynamics-train --dataset data/features.npz --encoder runs/pretrain/encoder.pt \
-  --config configs/croissant_four_parameters.json \
-  --validation croissant/8 --test croissant/9 --output runs/confidence
+CMA=/path/to/cma_run
+python -m softdynamics.cma_benchmark --mode prepare \
+  --root "$CMA" --previous "$RECOVERY"
+python -u -m softdynamics.cma_benchmark --mode supervise \
+  --root "$CMA" --gpus 0 1
 ```
 
-训练目标为 `log1p(S / tau)`，其中 `tau` 仅由训练交互确定。每个参数至少需要三个有可靠标签的训练交互。验证集选择停止点，测试集只做评价。循环更换验证/测试的整段交互即可做 leave-one-episode-out；不能把重复工作点当成新的独立交互。
+准备时创建实际的代码和 runtime 快照，检查与前一阶段的物理源文件一致，再导入可复用轨迹。若已有三档搜索目录，可用它代替 `RECOVERY` 复用经过哈希验证的缓存；硬链接缓存导入要求两个运行目录在同一文件系统。
 
-### 5. 推理与物理参数搜索
+优化第 j 个参数时使用 `sum_e(c[e,j] * L[e,q]) / sum_e(c[e,j])`，等权使用 `c=1`。`c` 由冻结模型在初始参数处计算，搜索中不读取教师置信度、不使用查询交互。每个候选都从各段初态完整模拟。当前是按参数轮换的一维 CMA-ES，四个分数保持独立；不是联合四维协方差搜索。
+
+两种方法共享初值、随机种子、搜索边界与前向预算，报告 32/64/96 个候选时的结果。局部范围继承已有模型工作点。详见 [CMA-ES 协议](docs/cma_recovery.md)。
+
+### 4. 留出交互与六项指标
 
 ```bash
-softdynamics-predict --checkpoint runs/confidence/model.pt \
-  --input data/normalized/episode_0.npz \
-  --parameters 3547.0699 0.278514 0.853391 0.359543
-
-softdynamics-weights --manifest data/search.json --checkpoint runs/confidence/model.pt \
-  --start 0.025 0.025 0.025 0.025 --output data/weights.npz
-softdynamics-search --config configs/croissant_four_parameters.json \
-  --weights data/weights.npz --manifest data/search.json --workspace data/workspace \
-  --gpus 0 1 --cache runs/rollouts --output runs/search.json
+EVALUATION=/path/to/evaluation
+python -m softdynamics.render_evaluation --mode prepare \
+  --root "$EVALUATION" --run "$CMA" --empm /path/to/external/empm
+python -m softdynamics.render_evaluation --mode all \
+  --root "$EVALUATION" --device cuda:0
 ```
 
-`search.json` 的有序 episode 列表与权重一致，每行包含 `episode`、`input`、`observation`、`metadata`、`padding`。`input` 给网络，`observation` 给物理评分；两者字段不同。需要教师对照时提供该初始工作点的 `teacher` 文件并显式添加 `--teacher-mask`。此时所有对照共享教师可靠性掩码，不能将它表述成完全无需教师的部署验证。
+参数先冻结，再计算 Dist、Track、IoU、PSNR、SSIM、LPIPS。评测不重新拟合参数或外观。几何/图像指标与用于搜索的阶段加权损失分别报告，定义及外部依赖见[六指标评测](docs/six_metric_evaluation.md)。
 
-也可给搜索传入 `--loss-bank data/full_losses.npz`，直接复用已算好的完整候选误差。它必须包含 `q[C,4]`、`losses[C,E]`、`episodes[E]`，缺失候选会报错，不插值或偷偷跳过。
+## 代码索引
 
-一次搜索固定初始预测的四维权重。每个参数在三档取值之间比较完整轨迹损失，循环三轮；没有通过模拟器进行梯度回传。改变权重和改变参数方向是两件事：方向来自候选损失。新增候选需要重新跑完整物理轨迹，因此可能很耗时。
+| 模块 | 功能 |
+|---|---|
+| `runtime/prepare_legacy.py`, `build_asset.py`, `registration.py`, `physical_asset.py` | 原始首帧体积、共享材料资产及初态配准 |
+| `runtime/build_queries.py`, `run_episode.py`, `gs-layer/`, `empm/` | 动作打包、接触与确定性 MPM 前向模拟 |
+| `shared_data.py`, `shared_pipeline.py` | 清洗版输入、共享资产、可恢复多卡调度 |
+| `teacher.py`, `shared_teacher.py`, `labels.py` | 完整状态恢复、有限差分、步长检查及标签掩码 |
+| `motion.py`, `pretrain.py`, `shared_training.py`, `features.py`, `training.py` | 编码器预训练与独立参数头 |
+| `inference.py`, `weights.py` | 冻结模型推理及参数级交互权重 |
+| `recovery_data.py`, `recovery_benchmark.py`, `cma_search.py`, `cma_benchmark.py` | 完整轨迹拟合、三档对照及连续 CMA-ES |
+| `recovery_report.py`, `recovery_efficiency.py` | 配对收益、候选预算和恢复效率 |
+| `evaluation_metrics.py`, `render_evaluation.py` | 六项指标、物理重放与外观传输 |
 
-搜索输出是候选参数，包含物理有效性和未加权目标；不会覆盖原资产。真实数据实验应在参数冻结后单独运行留出交互，并按预先规定的验收规则决定是否采用候选。
+表中的资产和物理运行文件位于 `runtime/`，训练、搜索和评测模块位于 `softdynamics/`。实验输入契约见[数据接口](docs/data_contract.md)，整理验证记录见[发布核对说明](docs/code_release.md)。
 
-## 方法边界
+## 方法边界与来源
 
-- 分数为 `S/(S+tau)`，是相对局部运动敏感度，尚未标定成参数正确概率。
-- 教师固定中间状态，不包含该状态对参数的历史导数；不等于完整轨迹总导数。
-- 当前目标不扣除参数耦合；保存相关矩阵供诊断，没有把 Schur complement 接入优化。
-- 完整物理拟合从每段初态连续运行，没有用后续真实几何重置模拟器。
-- 拟合误差变小不能单独证明恢复了真实材料参数；需要已知真值恢复和留出交互验证。
-- 此仓库是实验代码整理，不宣称当前敏感度模型已稳定超过等权或常数基线。
+- 分数尚未标定成“参数正确概率”；每个参数独立，不限制一段交互只能对一个参数敏感。
+- 教师是条件于中间状态的局部偏导，不含完整历史对参数的总导数；参数相关矩阵用于诊断，未接入 Schur complement。
+- 参数更新使用完整前向候选搜索，没有通过 MPM 做物理反传；不使用后续真实几何重置模拟。
+- 实现完整不等于已证明加权稳定优于等权；需依据固定预算、留出交互和已知真值对照判断。
 
-[运行物理资产代码](runtime/README.md) · [数据接口](docs/data_contract.md) · [来源与许可证](THIRD_PARTY.md)
+保留原有许可证及第三方版权。EMPM 派生运行时受非商业研究许可限制，根目录 MIT 不覆盖其限制。见 [THIRD_PARTY.md](THIRD_PARTY.md) 和[来源清单](docs/source_provenance.json)。

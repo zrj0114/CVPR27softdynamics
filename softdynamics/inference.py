@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-from .motion import CausalMotion
+from .motion import CausalMotion, relative_actions
 
 PARAMETERS = ['E_pa', 'nu', 'ground_friction', 'velocity_decay_rate_s_inv']
 
@@ -34,8 +34,9 @@ def validate_input(data):
     T, N = positions.shape[:2]
     if T < 16 or N < 128:
         raise ValueError('At least 16 frames and 128 point tracks are required')
-    for key, shape in [('valid', (T, N)), ('geometry', (N, 15)),
-                       ('actions', (T, 28)), ('times', (T,))]:
+    if np.shape(data['actions']) not in [(T,28), (T,52)]:
+        raise ValueError('actions must be [T,28] EEF or [T,52] independent pads')
+    for key, shape in [('valid', (T, N)), ('geometry', (N, 15)), ('times', (T,))]:
         if np.shape(data[key]) != shape:
             raise ValueError(f'{key} must have shape {shape}')
     if np.asarray(data['valid']).dtype != np.bool_:
@@ -59,13 +60,7 @@ def extract(encoder, d):
         x = d['positions'][start:start + 16, ids]
         valid = d['valid'][start:start + 16, ids]
         times = d['times'][start:start + 16]
-        actions = d['actions'][start:start + 16].clone()
-        for g in range(2):
-            mat = actions[:, g * 14:g * 14 + 12].reshape(-1, 3, 4)
-            r0, t0 = mat[-1, :, :3].clone(), mat[-1, :, 3].clone()
-            mat[:, :, :3] = mat[:, :, :3] @ r0.T - torch.eye(3, device=device)
-            mat[:, :, 3] -= t0
-            mat *= actions[:, g * 14 + 13, None, None]
+        actions = relative_actions(d['actions'][start:start + 16], -1)
         batch = dict(past=x[None], valid=valid[None],
                      geometry=d['geometry'][ids][None], anchor=x[-1][None],
                      past_times=(times - times[-1])[None])
@@ -85,7 +80,7 @@ class ConfidenceModel:
             raise ValueError('An explicit trained checkpoint is required')
         self.device = torch.device(device)
         self.bundle = torch.load(checkpoint, map_location='cpu', weights_only=True)
-        self.encoder = CausalMotion(actions=True).to(self.device)
+        self.encoder = CausalMotion(actions=True, action_dim=self.bundle.get('action_dim',28)).to(self.device)
         self.encoder.load_state_dict(self.bundle['encoder'])
         self.encoder.eval()
         self.models = []

@@ -15,6 +15,15 @@ from .parameters import ParameterSpace
 
 def select_windows(data, meta, phase_weights, per_phase=2, horizon=1):
     """Choose endpoints from observed metadata only; keep every chosen window."""
+    if 'teacher_windows' in meta:
+        windows = meta['teacher_windows']
+        if not windows or any(w['start'] < 0 or w['end']-w['start'] != horizon or
+                              int(data['frames'][w['index']]) != w['end'] for w in windows):
+            raise ValueError('Invalid explicit teacher endpoints')
+        for phase, weight in phase_weights.items():
+            if not np.isclose(sum(w['weight'] for w in windows if w['phase']==phase), weight):
+                raise ValueError('Explicit teacher windows change phase weights')
+        return sorted(windows, key=lambda w:w['end'])
     rows = []
     for name, weight in phase_weights.items():
         eligible = []
@@ -31,7 +40,7 @@ def select_windows(data, meta, phase_weights, per_phase=2, horizon=1):
     return sorted(rows, key=lambda r: r['end'])
 
 
-def generate(runtime, data, meta, space, spec, phase_weights, output):
+def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_observer=None):
     """Start with a freshly initialized truth runtime and preserve all windows."""
     if runtime.frame != 0:
         raise ValueError('Teacher runtime must start at the original initial state')
@@ -46,12 +55,16 @@ def generate(runtime, data, meta, space, spec, phase_weights, output):
     binding, weights = data['binding'][ids], data['weights'][ids]
     starts = {w['start'] for w in windows}
     snapshots = {}
+    if nominal_observer is not None:
+        nominal_observer(runtime)
     if 0 in starts:
         snapshots[0] = runtime.snapshot()
     for frame in range(1, len(runtime.times)):
         check = runtime.advance(frame)
         if not check['valid']:
             raise RuntimeError(f'Invalid nominal rollout at frame {frame}: {check}')
+        if nominal_observer is not None:
+            nominal_observer(runtime)
         if frame in starts:
             snapshots[frame] = runtime.snapshot()
     def vector(w):
@@ -65,7 +78,9 @@ def generate(runtime, data, meta, space, spec, phase_weights, output):
         work=parameters(q);coarse=[];fine=[];physical=[];base_vectors=[];window_info=[]
         for wi,w in enumerate(windows):
             snap=snapshots[w['start']];digest=runtime.digest(snap)
-            runtime.restore(snap,work);check=runtime.advance(w['end']);assert check['valid']
+            runtime.restore(snap,work);check=runtime.advance(w['end'])
+            if not check['valid']:
+                raise RuntimeError(f'Invalid nominal query {qi} at frame {w["end"]}: {check}')
             y0=vector(w);nominal=runtime.state_hashes();base_vectors.append(y0)
             columns=[];ok=np.ones(4,bool)
             for radius in spec['radii']:
@@ -79,7 +94,9 @@ def generate(runtime, data, meta, space, spec, phase_weights, output):
                         offsets.append(abs(coordinate(p)[j]-coordinate(work)[j]))
                     col,_=central_column(y0,responses[1],responses[0],offsets[1],offsets[0]);js.append(col)
                 columns.append(np.stack(js,axis=1))
-            runtime.restore(snap,work);assert runtime.advance(w['end'])['valid']
+            runtime.restore(snap,work);check=runtime.advance(w['end'])
+            if not check['valid']:
+                raise RuntimeError(f'Invalid nominal repeat {qi} at frame {w["end"]}: {check}')
             assert nominal==runtime.state_hashes() and digest==runtime.digest(snap),'Branch state contamination'
             coarse.append(columns[0]);fine.append(columns[1]);physical.append(ok)
             window_info.append(dict(**w,snapshot_digest=digest,nominal_hashes=nominal,zero_repeat_identical=True))

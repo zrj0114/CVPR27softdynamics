@@ -4,6 +4,7 @@
 - `runtime/empm/` 为实验所使用的 EMPM solver 源码快照，来源运行清单记录 upstream commit `8e241057ca9ec6ad19c3fb7d75dc7407baba8de0`。保留 [RAI Institute Research License](runtime/empm/LICENSE.md)：仅限非商业研究使用，保留原版权、条件与免责声明。
 - `runtime/` 的接触、确定性传输、资产与路径接口为项目适配；它们与上游快照共同构成修改后的研究运行时，不能视为未修改的官方 EMPM 发布。根目录 MIT 许可不解除上游研究限制。`softdynamics/adapters/empm.py` 也依赖这一运行时。
 - `softdynamics/motion.py`、教师数值方法、预测头、轨迹评分及坐标搜索从当前 Deform360 实验中提取；新增了显式参数、命令行和缓存接口。核心提取文件的来源及提取前 SHA-256 见 [source_provenance.json](docs/source_provenance.json)。
+- `runtime/prepare_legacy.py` 的相机解析和体积函数来自项目原始 `calibrate_bilateral_gripper.py` / `prepare_bilateral_inputs.py`；保留原函数，只整理路径和已有动作输入。清洗版准备、训练、接触及 CMA-ES 代码来自已完成的第一创新点实验，当前发布文件摘要一并记录在来源清单中。
 - Deform360 数据、Gaussian 资产、动作、教师标签、训练权重和第三方下载文件不随本仓库分发。
 
 方法参考：

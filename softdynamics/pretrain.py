@@ -47,7 +47,8 @@ def main():
     data = {r['id']: load_episode(relative_path(args.manifest, r['path']), args.device)
             for r in train}
     keys = list(data)
-    model = CausalMotion(actions=not args.no_actions).to(args.device)
+    action_dim = data[keys[0]]['actions'].shape[-1]
+    model = CausalMotion(actions=not args.no_actions, action_dim=action_dim).to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=.01)
     rng = np.random.default_rng(1300 + args.seed)
     history = []
@@ -68,7 +69,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     # Freeze before loading any held-out trajectories; no checkpoint selection on test.
     torch.save(dict(model=model.state_dict(), training_episodes=keys,
-                    heldout=args.heldout_object, use_actions=not args.no_actions),
+                    heldout=args.heldout_object, use_actions=not args.no_actions, action_dim=action_dim),
                args.output / 'encoder.pt')
     model.eval()
     evaluation = []

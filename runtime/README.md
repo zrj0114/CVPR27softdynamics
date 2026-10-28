@@ -5,13 +5,33 @@
 ```bash
 export SOFTDYNAMICS_WORKSPACE="$PWD/data/workspace"
 export SOFTDYNAMICS_CAPTURE_ROOT="$PWD/data/captures"
+python runtime/prepare_legacy.py prepare \
+  --capture-root "$SOFTDYNAMICS_CAPTURE_ROOT" \
+  --processed-root /path/to/processed/121-croissant-plush \
+  --workspace "$SOFTDYNAMICS_WORKSPACE" --episodes 0 1 2 3 4 5 6 7 8 9
 python runtime/build_asset.py --reference-episode 5 --episodes 0 1 2 3 4 5 6 7 8 9
 python runtime/build_queries.py
 python runtime/run_episode.py --episode 0 --transfer-mode deterministic \
+  --young-modulus 3547.0699 --poisson-ratio 0.278514 \
+  --contact-friction 2.15827 --sliding-friction 0.770921 \
+  --ground-friction 0.853391 --velocity-decay-rate 0.359543 \
   --compact-output --output-root "$PWD/runs/baseline"
 ```
 
 如已有共享资产和准备好的输入，可直接放入 workspace 后从最后一步开始。此配置的接触尺寸、固定密度和地面高度沿用牛角包实验，不是通用夹爪校准器。
+
+上面显式传入历史基准的六个物理设置；不传时部分值来自 asset 元数据，不能据此声称复现同一轨迹。episode 4/6/7/8/9 还需 `--grid-padding-cells 64`。
+
+`prepare_legacy.py` 的相机解析和首帧体积函数直接提取自原始准备代码，保留 3 mm 体素、凸包支持和首帧多视角轮廓雕刻。动作读取已完成标定的 `pads_world.npz`，保留缺测标志，通过已有固定变换转换到旧 marker 坐标。它不重新标定夹爪，也不训练 Gaussian。
+
+该入口的 capture 目录需包含 `episodes/episode_N/pads_world.npz`、`source_processed/metadata.json`、`source_processed/metric_params_refined_undistorted.txt`，以及下面用于打包查询的相机和标注文件。processed 目录提供 `splatfacto.tar` 和 `cameras.tar`。如果已有提取的视觉输入，可单独运行：
+
+```bash
+python runtime/prepare_legacy.py carve --source /path/to/extracted/episode/source \
+  --output "$SOFTDYNAMICS_WORKSPACE/prepared/episode_0"
+```
+
+单独 carve 只生成体积；动作仍需准备。清洗版 `world_from_pad_center` 输入应走 `softdynamics.shared_data`，不要套用这里的 holder→marker 变换。
 
 ## 构建资产前需要的文件
 

@@ -4,14 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "softdynamics"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interaction-conditioned physical parameter sensitivity for deformable dynamics"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "scipy>=1.10", "torch>=2.2"]
 
 [project.optional-dependencies]
 physics = ["warp-lang==1.8.1", "jaxtyping", "trimesh", "scikit-image", "plyfile"]
+deform360 = ["h5py", "opencv-python-headless"]
 test = ["pytest>=8"]
+search = ["cma==4.5.0"]
+report = ["matplotlib>=3.7"]
 
 [project.scripts]
 softdynamics-pretrain = "softdynamics.pretrain:main"
@@ -22,6 +25,16 @@ softdynamics-teacher = "softdynamics.teacher:main"
 softdynamics-search = "softdynamics.search:main"
 softdynamics-prepare = "softdynamics.data:main"
 softdynamics-weights = "softdynamics.weights:main"
+softdynamics-shared-data = "softdynamics.shared_data:main"
+softdynamics-shared-pipeline = "softdynamics.shared_pipeline:main"
+softdynamics-shared-teacher = "softdynamics.shared_teacher:main"
+softdynamics-shared-train = "softdynamics.shared_training:main"
+softdynamics-recovery-data = "softdynamics.recovery_data:main"
+softdynamics-recovery = "softdynamics.recovery_benchmark:main"
+softdynamics-recovery-report = "softdynamics.recovery_report:main"
+softdynamics-recovery-efficiency = "softdynamics.recovery_efficiency:main"
+softdynamics-cma = "softdynamics.cma_benchmark:main"
+softdynamics-evaluate = "softdynamics.render_evaluation:main"
 
 [tool.setuptools.packages.find]
 include = ["softdynamics*"]

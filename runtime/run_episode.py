@@ -97,12 +97,12 @@ def interval_motion(p0, p1, valid0, valid1, interval, shift):
     return enabled.astype(np.int32), transforms, linear, angular
 
 
-def initialize(xyz, patches, times, device, padding_cells=0, contact_friction=2.,sliding_friction=.8, young_modulus=4000., rest_volumes=None, masses=None, initial_F=None, poisson_ratio=.3, ground_friction=.8):
+def initialize(xyz, patches, times, device, padding_cells=0, contact_friction=2.,sliding_friction=.8, young_modulus=4000., rest_volumes=None, masses=None, initial_F=None, poisson_ratio=.3, ground_friction=.8, *, grid_spacing_m=None, grid_size=None, world_shift=None, ground_y_world_m=-.01):
     # Original state, material, grid and ground initialization.
-    dx = .4 / 128
-    grid = 128 + 2 * padding_cells
+    dx = .4 / 128 if grid_spacing_m is None else float(grid_spacing_m)
+    grid = 128 + 2 * padding_cells if grid_size is None else int(grid_size)
     domain = grid * dx
-    shift = np.array([.2, .1, .2]) - xyz.mean(0) + padding_cells * dx
+    shift = np.array([.2, .1, .2]) - xyz.mean(0) + padding_cells * dx if world_shift is None else np.asarray(world_shift)
     x = torch.tensor(xyz + shift, dtype=torch.float32, device=device)
     if rest_volumes is None:rest_volumes=np.full(len(xyz),(.003/2)**3)
     if masses is None:masses=rest_volumes*100.
@@ -138,7 +138,7 @@ def initialize(xyz, patches, times, device, padding_cells=0, contact_friction=2.
         c.right_mass = wp.zeros((grid,) * 3, dtype=float, device=device)
         c.momentum = momentum; c.weight = weight
         c.inv_dx = model.inv_dx; c.start_time = 0.; c.end_time = float(times[-1] + 1.)
-        c.gain = 35.; c.ground = float(-.01 + shift[1]); c.friction = ground_friction
+        c.gain = 35.; c.ground = float(ground_y_world_m + shift[1]); c.friction = ground_friction
         c.contact_friction = contact_friction; c.sliding_friction = sliding_friction
         c.mode = 2; c.radius = .014; c.footprint_y = .025; c.footprint_z = .018
         c.plane_centers = wp.array(planes, dtype=wp.vec3, device=device)
