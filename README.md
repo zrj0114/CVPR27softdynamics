@@ -1,8 +1,8 @@
 # CVPR27softdynamics
 
-当前版本：**材料条件化局部图 Transformer，用独立单步动力学预测和交互敏感度评分辅助 E、ν 辨识**。本次源码快照日期为 **2026-11-10**，包含教师 B 接触、教师加速 v2，以及矩形网格和细网格数值修复。
+当前版本：**材料条件化局部图 Transformer + 因果 GRU，联合学习连续动力学、材料响应和 E、ν 的联合敏感度矩阵**。本次更新日期为 **2026-11-10**，包含教师 B 接触、教师加速 v2，以及矩形网格和细网格数值修复。
 
-新教师标签仍在生成，**此版网络尚未重新训练**。动力学材料响应方向／幅度监督仍是待实现的改进。
+训练使用固定的 **2,985 条训练轨迹与 320 条验证轨迹**，280 条已完成测试轨迹不参与训练、校准或选模。新架构已通过真实数据的多步前向／反向检查，训练结果应以运行目录的状态与验证记录为准。
 
 ```mermaid
 flowchart TD
@@ -13,27 +13,30 @@ flowchart TD
     P --> H
     M --> H
     M -. "每层特征缩放与平移" .-> H
-    H --> D["逐点动力学头：256 → 256 → 3"]
-    D --> X["区间速度与下一帧位置"]
-    H --> Q["观测上下文的空间与时间 mean/max 池化<br/>1024 维交互表示"]
-    Q --> E["E 敏感度头：1024 → 128 → 1"]
-    Q --> N["ν 敏感度头：1024 → 128 → 1"]
+    H --> R["逐点 GRU：256 维因果记忆"]
+    R --> D["逐点动力学头：区间速度与下一帧位置"]
+    D --> X["1 → 4 → 8 → 16 步连续预测"]
+    H --> Q["空间 mean/max + 时间与阶段特征<br/>128 维序列 GRU"]
+    Q --> J["联合头：s_E、s_ν、ρ → 半正定 2×2 矩阵"]
+    X -. "成对教师轨迹的方向／幅度监督" .-> D
+    D -. "固定状态参数扰动与教师 J 对齐" .-> J
 ```
 
-动力学和敏感度任务共享编码器权重，但使用各自的输入样本。动力学使用当前状态，评分使用观测交互上下文。搜索在网络外进行，同一物体各段交互共享 E、ν。
+动力学使用当前状态及最多 3 帧过去状态初始化记忆，之后反馈自己的预测；评分分支使用有掩码的观测交互序列。两者共享空间编码器，并通过有教师监督的局部材料响应联系。固定状态局部响应与整段轨迹响应采用不同损失，不混用标签。
 
 | 项目 | 当前实现 |
 |---|---|
 | 动力学节点 | 512 个，参考几何中各取 24 个邻居 |
-| 网络规模 | 3,200,789 个参数；动力学网络 2,934,035，两个评分头合计 266,754 |
+| 网络规模 | 3,632,614 个参数，其中动力学与因果记忆 3,328,787 个 |
+| 时间建模 | 动力学逐点 GRU；评分分支时间／阶段特征 + 序列 GRU |
 | 材料范围 | E：1,000–12,000 Pa；ν：0.08–0.42 |
-| 预测协议 | 独立单步；每步读取给定当前状态，不反馈前一步预测 |
+| 预测协议 | 40,000 次更新，1,000／4,000／10,000 步后依次切换到 4／8／16 步预测 |
 | 评分含义 | 对 E、ν 的局部运动敏感度，不是材料值或预测正确概率 |
-| 参数搜索 | 两个参数各自使用固定交互权重汇总梯度；最终按平均观测误差排名 |
+| 联合评分 | 响应强度与方向相关性；输出半正定矩阵，不是材料参数的统计先验 |
 | 教师标签 | 排除 shirt 后，49 个物体 × 10 段 × 8 组材料＝3,920 份目标标签 |
-| 网络状态 | 已实现并经过代码验证；选定接触版本的重训尚未开始 |
+| 选模 | 固定验证集的 16 步位置误差、局部／整段材料响应误差和短预算参数恢复诊断 |
 
-详细模块、损失和版本边界见 [最新架构](docs/model_architecture_20261110.md)。
+详细模块、损失和验证范围见 [连续预测与联合响应](docs/coupled_training_20261110.md)。[独立单步版本](docs/model_architecture_20261110.md)保留为历史基线。
 
 ## 安装与检查
 
@@ -50,12 +53,12 @@ CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m pytest -q
 
 ```python
 import json
-from softdynamics.elastic_step_objective import StepWorld
+from softdynamics.coupled_world_model import CoupledWorld
 
 with open('configs/teacher50_current.json') as f:
     config = json.load(f)
-model = StepWorld(config['model'], ('E_pa', 'nu'))
-print(sum(p.numel() for p in model.parameters()))  # 3200789
+model = CoupledWorld(config['model'], tau=[1., 1.])  # 实际 tau 仅由训练集校准
+print(sum(p.numel() for p in model.parameters()))
 ```
 
 ## 当前流程入口
@@ -66,30 +69,34 @@ print(sum(p.numel() for p in model.parameters()))  # 3200789
 | 教师 B 定义和动作契约 | `softdynamics/teacher_contact.py` |
 | 网络接触作用范围 | `softdynamics/teacher_contact_support.py` |
 | 标签准备与生成 | `softdynamics/teacher50.py`、`elastic_data.py` |
-| 独立单步训练 | `softdynamics/elastic_world_train.py`、`elastic_step_objective.py` |
-| 共享骨干与敏感度头 | `softdynamics/shared_world_model.py`、`joint_world.py` |
-| 神经材料搜索 | `softdynamics/elastic_world_search.py` |
-| 单步验证、梯度诊断 | `elastic_step_validation.py`、`elastic_gradient_audit.py` |
+| 当前连续训练 | `softdynamics/coupled_world_train.py` |
+| 共享骨干、因果记忆与联合头 | `shared_world_model.py`、`coupled_world_model.py` |
+| 数据快照、成对轨迹与局部响应 | `softdynamics/coupled_world_data.py` |
+| 连续验证与材料恢复诊断 | `softdynamics/coupled_world_validation.py` |
+| 历史单步训练与搜索 | `elastic_world_train.py`、`elastic_world_search.py` |
 | 教师加速 | `bound_observation.py`、`runtime/gs-layer/active_grid_kernels.py`、`deterministic_transfer.py` |
 | 保持坐标的扩域、细网格重试 | `numerical_retry_rectangular.py`、`rectangular_grid.py`、`numerical_retry_spatial.py`、`spatial_grid.py` |
 
 对已准备好、来源一致的教师批次，可显式准备训练再启动：
 
 ```bash
-python -m softdynamics.elastic_world_train prepare \
-  --data-root /path/to/prepared_teacher_run --output /path/to/new_training_run
-torchrun --standalone --nproc_per_node=1 -m softdynamics.elastic_world_train train \
+python -m softdynamics.coupled_world_train prepare \
+  --data-root /path/to/immutable_teacher_snapshot --output /path/to/new_training_run
+CUDA_VISIBLE_DEVICES=0 python -m softdynamics.coupled_world_train train \
   --output /path/to/new_training_run
 ```
 
-准备入口冻结数据清单并检查接触、动作与标签一致性。默认从头训练 40,000 次更新，仅保存 `best.pt` 和 `latest.pt`。这些命令描述现有实现，不表示新训练已完成，也不包含待开发的材料响应损失。
+准备入口冻结数据清单并检查接触、动作与标签一致性。默认从头训练 40,000 次更新，仅保存 `best.pt` 和 `latest.pt`。当前训练入口使用单张 CUDA 卡。`--resume` 恢复本次运行的模型、优化器和随机数状态。
 
-```bash
-python -m softdynamics.elastic_world_search \
-  --checkpoint /path/to/new_training_run/training/best.pt \
-  --downstream-run /path/to/prepared_downstream_run \
-  --object 125-rabbit --output /path/to/search.json --weighting confidence
+```python
+from softdynamics.coupled_world_model import load_coupled, forecast
+model, bundle = load_coupled('/path/to/new_training_run/training/best.pt', 'cuda:0')
+model.eval()
+# batch 由 temporal_batch 构造；输入为归一化状态、动作和过去历史。
+# forecast(model.world, batch, geometry, gradients=True) 保留预测段内的材料梯度。
 ```
+
+新检查点使用独立 schema；旧 `elastic_world_search` 的单步检查点入口不适用。当前代码提供验证集短窗口参数拟合，完整真实交互搜索及原始 MPM 复演需另行执行与验证，不能从训练损失推断其效果。
 
 数据、动作、标签、权重和集群连接配置由运行环境提供。本快照保留实验来源路径与哈希；迁移完整采集批次前须按 [发布说明](docs/release_20261110.md) 核对外部输入。
 
@@ -101,6 +108,6 @@ python -m softdynamics.elastic_world_search \
 - 修复时同一交互的 8 组标签采用一致几何、时间步和网格设置。数值通过与物理逼真度分别评价。
 - 当前只搜索 E、ν，摩擦和阻尼沿用教师设置。仓库保留旧四参数接口供历史复现。
 
-[2026-10 基线流程](docs/baseline_pipeline_20261028.md) · [数据接口](docs/data_contract.md) · [来源与许可证](THIRD_PARTY.md) · [本次源文件哈希](docs/source_snapshot_20261110.json)
+[2026-10 基线流程](docs/baseline_pipeline_20261028.md) · [数据接口](docs/data_contract.md) · [来源与许可证](THIRD_PARTY.md) · [初始单步源码快照哈希](docs/source_snapshot_20261110.json)
 
 `runtime/empm/` 及派生研究运行时遵循所附上游研究许可证，根目录许可证不覆盖第三方条款。
