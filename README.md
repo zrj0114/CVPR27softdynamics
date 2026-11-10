@@ -1,123 +1,106 @@
 # CVPR27softdynamics
 
-整理已实现的 **初始 real2sim 流程 + 第一创新点：交互条件下的物理参数敏感度学习与加权参数辨识**。
+当前版本：**材料条件化局部图 Transformer，用独立单步动力学预测和交互敏感度评分辅助 E、ν 辨识**。本次源码快照日期为 **2026-11-10**，包含教师 B 接触、教师加速 v2，以及矩形网格和细网格数值修复。
 
-同一物体共用 canonical asset，各段交互仅用各自首帧配准初态。模型对每段交互输出四个独立分数：**杨氏模量 E、泊松比 ν、地面摩擦、速度衰减率**。优化某个参数时，在同一物体的不同交互之间使用对应的那一列权重；不使用触觉，不做跨参数 softmax。
+新教师标签仍在生成，**此版网络尚未重新训练**。动力学材料响应方向／幅度监督仍是待实现的改进。
 
-```text
-初帧 Gaussian + 多视角首帧轮廓 + 已测夹爪动作
-  → 共享材料 asset + 每段初态 → EMPM 完整前向模拟
-  → 离线有限差分敏感度标签 → 运动编码器预训练 + 四个独立预测头
-  → 冻结置信度模型 → 按参数加权 CMA-ES → 留出交互评测
+```mermaid
+flowchart TD
+    A["当前节点状态与参考几何"] --> S["State MLP：31 → 256 → 256"]
+    B["夹爪位姿、运动与接触几何"] --> P["Pad MLP：46 → 256 → 256<br/>有限垫面扫掠与 MPM 支撑范围门控"]
+    C["候选材料 E、ν"] --> M["Material MLP：2 → 256 → 256"]
+    S --> H["4 层局部图 Transformer<br/>256 维、4 头、24 邻居"]
+    P --> H
+    M --> H
+    M -. "每层特征缩放与平移" .-> H
+    H --> D["逐点动力学头：256 → 256 → 3"]
+    D --> X["区间速度与下一帧位置"]
+    H --> Q["观测上下文的空间与时间 mean/max 池化<br/>1024 维交互表示"]
+    Q --> E["E 敏感度头：1024 → 128 → 1"]
+    Q --> N["ν 敏感度头：1024 → 128 → 1"]
 ```
 
-数据、资产、教师标签、训练权重和实验输出不包含在代码仓库中。首帧 Gaussian、掩码、相机和动作来自已有的 Deform360 数据处理结果；本仓库不重新实现上游 Gaussian 训练或夹爪标定。
+动力学和敏感度任务共享编码器权重，但使用各自的输入样本。动力学使用当前状态，评分使用观测交互上下文。搜索在网络外进行，同一物体各段交互共享 E、ν。
 
-## 安装
+| 项目 | 当前实现 |
+|---|---|
+| 动力学节点 | 512 个，参考几何中各取 24 个邻居 |
+| 网络规模 | 3,200,789 个参数；动力学网络 2,934,035，两个评分头合计 266,754 |
+| 材料范围 | E：1,000–12,000 Pa；ν：0.08–0.42 |
+| 预测协议 | 独立单步；每步读取给定当前状态，不反馈前一步预测 |
+| 评分含义 | 对 E、ν 的局部运动敏感度，不是材料值或预测正确概率 |
+| 参数搜索 | 两个参数各自使用固定交互权重汇总梯度；最终按平均观测误差排名 |
+| 教师标签 | 排除 shirt 后，49 个物体 × 10 段 × 8 组材料＝3,920 份目标标签 |
+| 网络状态 | 已实现并经过代码验证；选定接触版本的重训尚未开始 |
 
-建议从源码 checkout 以 editable 模式安装，Python >=3.10。物理模拟需要与驱动匹配的 PyTorch/CUDA，Warp 固定为 1.8.1。
+详细模块、损失和版本边界见 [最新架构](docs/model_architecture_20261110.md)。
+
+## 安装与检查
+
+从源码 checkout 安装，Python >= 3.10。物理教师需要匹配驱动的 CUDA/PyTorch，Warp 固定为 1.8.1。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[physics,deform360,search,report,test]'
-pytest -q
+CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m pytest -q
 ```
 
-六项指标中的 Gaussian 渲染另需安装外部 EMPM checkout 的 rasterizer、SSIM 和 LPIPS 依赖，见[评测说明](docs/six_metric_evaluation.md)。`runtime/` 从源码 checkout 使用；普通神经网络推理只依赖 `softdynamics` 包。
+无需实验数据或 GPU 即可实例化当前网络：
 
-## 两个已有物理运行版本
+```python
+import json
+from softdynamics.elastic_step_objective import StepWorld
 
-| 使用场景 | 入口 | 输入与接触 |
-|---|---|---|
-| 原始牛角包共享资产实验 | `runtime/prepare_legacy.py`, `build_asset.py`, `build_queries.py`, `run_episode.py`; `adapters/empm.py` | 旧版测量的 marker 位姿、固定材料接触标签、50×36 mm 接触面；参考 episode 5 |
-| 清洗版数据的全量第一创新点 | `shared_data.py`, `shared_teacher.py`; `adapters/pad_empm.py` | 修正相机、独立指垫中心位姿、64×25 mm 接触面；各物体最早的候选段作参考 |
-
-两者共用 FCR/MPM 求解核心，但接触坐标、尺寸、材料接触资格及网格设定有区别。历史约 3.19 mm 是旧牛角包实验特定协议的结果，不能直接作为清洗版多物体或其他指标的结果。复现时保留同一套 asset、初态、动作、参数、接触版本和评分定义。
-
-原始初始化与运行命令见 [runtime/README.md](runtime/README.md)。历史 28 维 EEF 编码器、教师与三档坐标搜索接口见[历史敏感度流程](docs/legacy_sensitivity.md)。
-
-## 当前第一创新点：从清洗数据到加权 CMA-ES
-
-### 1. 数据准备、离线标签与训练
-
-`SOURCE` 是包含 `物体/episode_N` 的 processed 数据目录，`CORRECTED` 是已洗好的相机和独立指垫交付目录。输出使用新目录，源数据只读。
-
-```bash
-SOURCE=/path/to/processed
-CORRECTED=/path/to/corrected_release
-PRETRAIN=/path/to/pretrain_run
-
-python -m softdynamics.shared_data --select-only \
-  --source "$SOURCE" --corrected "$CORRECTED" \
-  --config configs/corrected_release_pretrain.json --output "$PRETRAIN"
-python -u -m softdynamics.shared_pipeline --root "$PRETRAIN" \
-  --gpus 0 1 --prep-workers 4
+with open('configs/teacher50_current.json') as f:
+    config = json.load(f)
+model = StepWorld(config['model'], ('E_pa', 'nu'))
+print(sum(p.numel() for p in model.parameters()))  # 3200789
 ```
 
-这条流程完成首帧多视角体积构建、共享资产与各段初态、教师标签、运动编码器预训练和四个独立预测头训练。模型按物体划分；同一物体的所有交互、真值和工作点同组。输出模型为 `training/full/model.pt`。已有完整预训练目录可以直接用于下一步。
+## 当前流程入口
 
-教师固定完整中间状态，逐一扰动物理参数，通过中央差分计算短窗运动导数，并用两组步长检查可靠性。网络学习 `log1p(S/tau)`，推理映射为 `S/(S+tau)`；`tau` 仅由训练数据确定。详细字段、筛选和失败处理见[清洗版预训练说明](docs/corrected_release_pretrain.md)。
-
-### 2. 冻结模型，准备同物体多交互参数辨识
-
-```bash
-RECOVERY=/path/to/recovery_inputs
-python -m softdynamics.recovery_data --mode prepare \
-  --root "$RECOVERY" --pretrain "$PRETRAIN"
-```
-
-读取第一步实际生成的 `training/full/model.pt`，保存模型与资产哈希。各物体的拟合交互和查询交互在搜索前冻结。这里准备的是完整轨迹拟合及评测输入，不需要先跑完旧三档搜索。
-
-### 3. Ours + CMA-ES，与等权严格配对
-
-```bash
-CMA=/path/to/cma_run
-python -m softdynamics.cma_benchmark --mode prepare \
-  --root "$CMA" --previous "$RECOVERY"
-python -u -m softdynamics.cma_benchmark --mode supervise \
-  --root "$CMA" --gpus 0 1
-```
-
-准备时创建实际的代码和 runtime 快照，检查与前一阶段的物理源文件一致，再导入可复用轨迹。若已有三档搜索目录，可用它代替 `RECOVERY` 复用经过哈希验证的缓存；硬链接缓存导入要求两个运行目录在同一文件系统。
-
-优化第 j 个参数时使用 `sum_e(c[e,j] * L[e,q]) / sum_e(c[e,j])`，等权使用 `c=1`。`c` 由冻结模型在初始参数处计算，搜索中不读取教师置信度、不使用查询交互。每个候选都从各段初态完整模拟。当前是按参数轮换的一维 CMA-ES，四个分数保持独立；不是联合四维协方差搜索。
-
-两种方法共享初值、随机种子、搜索边界与前向预算，报告 32/64/96 个候选时的结果。局部范围继承已有模型工作点。详见 [CMA-ES 协议](docs/cma_recovery.md)。
-
-### 4. 留出交互与六项指标
-
-```bash
-EVALUATION=/path/to/evaluation
-python -m softdynamics.render_evaluation --mode prepare \
-  --root "$EVALUATION" --run "$CMA" --empm /path/to/external/empm
-python -m softdynamics.render_evaluation --mode all \
-  --root "$EVALUATION" --device cuda:0
-```
-
-参数先冻结，再计算 Dist、Track、IoU、PSNR、SSIM、LPIPS。评测不重新拟合参数或外观。几何/图像指标与用于搜索的阶段加权损失分别报告，定义及外部依赖见[六指标评测](docs/six_metric_evaluation.md)。
-
-## 代码索引
-
-| 模块 | 功能 |
+| 环节 | 代码 |
 |---|---|
-| `runtime/prepare_legacy.py`, `build_asset.py`, `registration.py`, `physical_asset.py` | 原始首帧体积、共享材料资产及初态配准 |
-| `runtime/build_queries.py`, `run_episode.py`, `gs-layer/`, `empm/` | 动作打包、接触与确定性 MPM 前向模拟 |
-| `shared_data.py`, `shared_pipeline.py` | 清洗版输入、共享资产、可恢复多卡调度 |
-| `teacher.py`, `shared_teacher.py`, `labels.py` | 完整状态恢复、有限差分、步长检查及标签掩码 |
-| `motion.py`, `pretrain.py`, `shared_training.py`, `features.py`, `training.py` | 编码器预训练与独立参数头 |
-| `inference.py`, `weights.py` | 冻结模型推理及参数级交互权重 |
-| `recovery_data.py`, `recovery_benchmark.py`, `cma_search.py`, `cma_benchmark.py` | 完整轨迹拟合、三档对照及连续 CMA-ES |
-| `recovery_report.py`, `recovery_efficiency.py` | 配对收益、候选预算和恢复效率 |
-| `evaluation_metrics.py`, `render_evaluation.py` | 六项指标、物理重放与外观传输 |
+| 当前物理与网络配置 | [configs/teacher50_current.json](configs/teacher50_current.json) |
+| 教师 B 定义和动作契约 | `softdynamics/teacher_contact.py` |
+| 网络接触作用范围 | `softdynamics/teacher_contact_support.py` |
+| 标签准备与生成 | `softdynamics/teacher50.py`、`elastic_data.py` |
+| 独立单步训练 | `softdynamics/elastic_world_train.py`、`elastic_step_objective.py` |
+| 共享骨干与敏感度头 | `softdynamics/shared_world_model.py`、`joint_world.py` |
+| 神经材料搜索 | `softdynamics/elastic_world_search.py` |
+| 单步验证、梯度诊断 | `elastic_step_validation.py`、`elastic_gradient_audit.py` |
+| 教师加速 | `bound_observation.py`、`runtime/gs-layer/active_grid_kernels.py`、`deterministic_transfer.py` |
+| 保持坐标的扩域、细网格重试 | `numerical_retry_rectangular.py`、`rectangular_grid.py`、`numerical_retry_spatial.py`、`spatial_grid.py` |
 
-表中的资产和物理运行文件位于 `runtime/`，训练、搜索和评测模块位于 `softdynamics/`。实验输入契约见[数据接口](docs/data_contract.md)，整理验证记录见[发布核对说明](docs/code_release.md)。
+对已准备好、来源一致的教师批次，可显式准备训练再启动：
 
-## 方法边界与来源
+```bash
+python -m softdynamics.elastic_world_train prepare \
+  --data-root /path/to/prepared_teacher_run --output /path/to/new_training_run
+torchrun --standalone --nproc_per_node=1 -m softdynamics.elastic_world_train train \
+  --output /path/to/new_training_run
+```
 
-- 分数尚未标定成“参数正确概率”；每个参数独立，不限制一段交互只能对一个参数敏感。
-- 教师是条件于中间状态的局部偏导，不含完整历史对参数的总导数；参数相关矩阵用于诊断，未接入 Schur complement。
-- 参数更新使用完整前向候选搜索，没有通过 MPM 做物理反传；不使用后续真实几何重置模拟。
-- 实现完整不等于已证明加权稳定优于等权；需依据固定预算、留出交互和已知真值对照判断。
+准备入口冻结数据清单并检查接触、动作与标签一致性。默认从头训练 40,000 次更新，仅保存 `best.pt` 和 `latest.pt`。这些命令描述现有实现，不表示新训练已完成，也不包含待开发的材料响应损失。
 
-保留原有许可证及第三方版权。EMPM 派生运行时受非商业研究许可限制，根目录 MIT 不覆盖其限制。见 [THIRD_PARTY.md](THIRD_PARTY.md) 和[来源清单](docs/source_provenance.json)。
+```bash
+python -m softdynamics.elastic_world_search \
+  --checkpoint /path/to/new_training_run/training/best.pt \
+  --downstream-run /path/to/prepared_downstream_run \
+  --object 125-rabbit --output /path/to/search.json --weighting confidence
+```
+
+数据、动作、标签、权重和集群连接配置由运行环境提供。本快照保留实验来源路径与哈希；迁移完整采集批次前须按 [发布说明](docs/release_20261110.md) 核对外部输入。
+
+## 接触与数据约定
+
+- 教师使用 64×25 mm 有限垫面、单边接触及库仑摩擦。多接触速度修正取平均的已知行为仍与选定 B 方案一致。
+- 动作通过源代码插值与端点保持补齐，保留单／双夹爪任务定义，没有增加姿态质量门槛。
+- 网络对齐有限垫面扫掠及 MPM 插值支撑范围，接触响应由网络学习，没有硬性不穿透保证。
+- 修复时同一交互的 8 组标签采用一致几何、时间步和网格设置。数值通过与物理逼真度分别评价。
+- 当前只搜索 E、ν，摩擦和阻尼沿用教师设置。仓库保留旧四参数接口供历史复现。
+
+[2026-10 基线流程](docs/baseline_pipeline_20261028.md) · [数据接口](docs/data_contract.md) · [来源与许可证](THIRD_PARTY.md) · [本次源文件哈希](docs/source_snapshot_20261110.json)
+
+`runtime/empm/` 及派生研究运行时遵循所附上游研究许可证，根目录许可证不覆盖第三方条款。

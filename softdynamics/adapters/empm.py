@@ -7,6 +7,7 @@ Elastic FCR has no evolving model-side plastic history. Other materials refused.
 import hashlib
 import importlib.util
 import math
+import os
 import sys
 import numpy as np
 from pathlib import Path
@@ -77,8 +78,23 @@ class BranchRuntime:
         return h.hexdigest()
 
     def restore(self, snapshot, parameters):
+        arrays = snapshot['arrays']
+        if os.environ.get('SOFTDYNAMICS_SNAPSHOT_CACHE', '0') == '1':
+            # One immutable host snapshot is mirrored at a time, with a hard
+            # memory cap. Keep the host arrays for independent digest checks.
+            # Copying to both ping-pong states preserves the original contract.
+            cache = getattr(self, '_restore_cache', None)
+            if sum(a.nbytes for a in arrays.values()) <= 512*1024**2:
+                if cache is None or cache[0] is not snapshot:
+                    import warp as wp
+                    self._restore_cache = None
+                    cache = None
+                    cached = {name: wp.array(values, dtype=getattr(self.states[0],name).dtype,
+                                              device=self.device) for name,values in arrays.items()}
+                    self._restore_cache = (snapshot,cached)
+                arrays = self._restore_cache[1]
         for state in self.states:
-            for name, values in snapshot['arrays'].items(): getattr(state, name).assign(values)
+            for name, values in arrays.items(): getattr(state, name).assign(values)
             for name in ('grid_m', 'grid_v_in', 'grid_v_out'): getattr(state, name).zero_()
         for c in self.contacts:
             for name in ('mass', 'right_mass', 'momentum', 'weight', 'correction'): getattr(c, name).zero_()
@@ -104,7 +120,25 @@ class BranchRuntime:
         return self.check()
 
     def positions(self, ids):
-        return (self.states[self.current].particle_x.numpy()[ids]-self.shift).astype(np.float32)
+        requested = np.asarray(ids)
+        if (os.environ.get('SOFTDYNAMICS_COMPACT_OBSERVATION','0') == '1' and
+                requested.ndim == 1 and requested.dtype.kind in 'iu' and
+                0 < requested.size < self.n):
+            import torch
+            import warp as wp
+            # Bound the cache and key by contents, so callers may reuse/mutate
+            # an index array without accidentally selecting stale particles.
+            key = (requested.dtype.str,requested.tobytes())
+            cache = getattr(self,'_position_index_cache',None)
+            if cache is None:self._position_index_cache = cache = {}
+            if key not in cache:
+                if len(cache) >= 4:cache.pop(next(iter(cache)))
+                cache[key] = torch.as_tensor(requested.astype(np.int64),device=self.device)
+            p = wp.to_torch(self.states[self.current].particle_x)[cache[key]].detach().cpu().numpy()
+        else:
+            p = self.states[self.current].particle_x.numpy()[ids]
+        # Keep the original float64 world-shift subtraction on the host.
+        return (p-self.shift).astype(np.float32)
 
     def state_hashes(self):
         return {name: hashlib.sha256(getattr(self.states[self.current], name).numpy().tobytes()).hexdigest() for name in DYNAMICS}

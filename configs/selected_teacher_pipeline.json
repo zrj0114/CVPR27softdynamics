@@ -1,0 +1,59 @@
+{
+  "schema": "deform360.selected-contact.v1",
+  "contact": {
+    "id": "deform360.current_teacher.finite_pad_coulomb.v1",
+    "face_size_m": [
+      0.064,
+      0.025
+    ],
+    "grid_dx_m": 0.003125,
+    "slab_depth_m": 0.00625,
+    "left_right_normal_signs": [
+      1.0,
+      -1.0
+    ],
+    "normal_response": "approaching relative normal velocity only; no adhesion",
+    "tangential_response": "current static/sliding Coulomb contact_delta",
+    "gripper_static_friction": 2.15827,
+    "gripper_sliding_friction": 0.770921,
+    "simultaneous_contacts": "current teacher average of contributing velocity corrections",
+    "kernels": {
+      "pad_contact_kernels.py": "42b4235079010ef63d3b826029fb8ff71340e1b859a6bfb93f1998f373345b3b",
+      "material_contact_kernels.py": "4c28c2085da2a35d24e17c27252711d7c7ce4f0078e202bc55b59654b19a5629"
+    },
+    "action_source": "/home/guangqi/data/deform360_pose_completion_source_20261103/dataset/episodes",
+    "gap_policy": "source rigid interpolation / endpoint hold, no pose quality gates",
+    "absent_grippers": "excluded by task metadata; never manufacture an absent controller",
+    "network_support": "finite_pad_grid_swept.v1",
+    "network_is_hard_contact_solver": false,
+    "domain_policy": "include complete recorded action timeline, including withdrawal"
+  },
+  "contact_sha256": "dd55574986d22f592f4fb89e05ac3693c363bf1a7583261cd0a49833d5b84d60",
+  "code_root": "/home/guangqi/zrj/CVPR27softdynamics_teacher_contact_20261103",
+  "model_architecture": {
+    "hidden": 256,
+    "layers": 4,
+    "heads": 4,
+    "kinematic_only": true,
+    "direct_displacement": true,
+    "contact_geometry": true,
+    "material_dim": 2,
+    "pad_locality": true,
+    "contact_contract": "deform360.current_teacher.finite_pad_coulomb.v1",
+    "pad_locality_geometry": "finite_pad_grid_swept.v1"
+  },
+  "primary_training_entrypoint": "softdynamics.elastic_world_train",
+  "primary_material_search_entrypoint": "softdynamics.elastic_world_search",
+  "teacher_alignment_report": "/home/guangqi/analysis/teacher-contact-unification-20261103/teacher_alignment.json",
+  "action_binding_report": "/home/guangqi/analysis/teacher-contact-unification-20261103/action_binding.json",
+  "network_implementation": "aligned finite support and geometry; learned dynamics, not a hard contact solver",
+  "existing_network_weights": "historical; not converted or retrained",
+  "training_started": false,
+  "known_separate_issue": "Simultaneous teacher corrections are still averaged, matching the selected current teacher. The previously identified multi-contact constraint defect has not been changed in this unification.",
+  "primary_teacher_entrypoint": "softdynamics.elastic_data",
+  "implementation_notes": "/home/guangqi/zrj/CVPR27softdynamics_teacher_contact_20261103/README_teacher_contact.txt",
+  "verification_report": "/home/guangqi/analysis/teacher-contact-unification-20261103/verification.json",
+  "teacher_records_currently_aligned": 103,
+  "teacher_records_requiring_regeneration": 166,
+  "batch_regeneration_started": false
+}

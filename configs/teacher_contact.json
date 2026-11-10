@@ -1,0 +1,28 @@
+{
+  "id": "deform360.current_teacher.finite_pad_coulomb.v1",
+  "face_size_m": [
+    0.064,
+    0.025
+  ],
+  "grid_dx_m": 0.003125,
+  "slab_depth_m": 0.00625,
+  "left_right_normal_signs": [
+    1.0,
+    -1.0
+  ],
+  "normal_response": "approaching relative normal velocity only; no adhesion",
+  "tangential_response": "current static/sliding Coulomb contact_delta",
+  "gripper_static_friction": 2.15827,
+  "gripper_sliding_friction": 0.770921,
+  "simultaneous_contacts": "current teacher average of contributing velocity corrections",
+  "kernels": {
+    "pad_contact_kernels.py": "42b4235079010ef63d3b826029fb8ff71340e1b859a6bfb93f1998f373345b3b",
+    "material_contact_kernels.py": "4c28c2085da2a35d24e17c27252711d7c7ce4f0078e202bc55b59654b19a5629"
+  },
+  "action_source": "/home/guangqi/data/deform360_pose_completion_source_20261103/dataset/episodes",
+  "gap_policy": "source rigid interpolation / endpoint hold, no pose quality gates",
+  "absent_grippers": "excluded by task metadata; never manufacture an absent controller",
+  "network_support": "finite_pad_grid_swept.v1",
+  "network_is_hard_contact_solver": false,
+  "domain_policy": "include complete recorded action timeline, including withdrawal"
+}

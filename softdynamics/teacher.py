@@ -5,6 +5,8 @@ not differentiate the state history and is not a full-rollout total derivative.
 """
 import argparse
 import math
+import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,7 @@ from .data import fps
 from .io import read_json, write_json as write, json_value as clean, sha256 as sha, load_npz
 from .labels import audit_columns, central_column
 from .parameters import ParameterSpace
+from .bound_observation import BoundObservation
 
 def select_windows(data, meta, phase_weights, per_phase=2, horizon=1):
     """Choose endpoints from observed metadata only; keep every chosen window."""
@@ -40,19 +43,21 @@ def select_windows(data, meta, phase_weights, per_phase=2, horizon=1):
     return sorted(rows, key=lambda r: r['end'])
 
 
-def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_observer=None):
+def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_observer=None, timings=None):
     """Start with a freshly initialized truth runtime and preserve all windows."""
+    started = time.perf_counter()
     if runtime.frame != 0:
         raise ValueError('Teacher runtime must start at the original initial state')
     out = Path(output)
     out.mkdir(parents=True, exist_ok=False)
     parameters, coordinate = space.parameters, space.coordinate
+    dimensions = len(space.coordinate(runtime.parameters))
     windows = select_windows(data, meta, phase_weights, spec['windows_per_phase'], 1)
     eligible = np.flatnonzero(data['track_visible'][0] & np.isfinite(data['tracks'][0]).all(1))
     if not len(eligible):
         raise ValueError('No visible points in initial frame')
     ids = eligible[fps(data['tracks'][0, eligible], spec['points'])]
-    binding, weights = data['binding'][ids], data['weights'][ids]
+    bound = BoundObservation(data,ids,compact=os.environ.get('SOFTDYNAMICS_COMPACT_OBSERVATION','0')=='1')
     starts = {w['start'] for w in windows}
     snapshots = {}
     if nominal_observer is not None:
@@ -67,12 +72,32 @@ def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_ob
             nominal_observer(runtime)
         if frame in starts:
             snapshots[frame] = runtime.snapshot()
+    nominal_finished = time.perf_counter()
+    branch_cache = {}
+    cache_enabled = os.environ.get('SOFTDYNAMICS_TEACHER_CACHE', '0') == '1'
+    cache_hits = 0
+    branch_runs = 0
     def vector(w):
-        p=runtime.positions(data['saved_ids'])
-        x=data['tracks'][0,ids]+np.sum((p[binding]-data['initial'][binding])*weights[...,None],axis=1)
+        x=bound.capture(runtime)
         visible=data['track_visible'][w['index'],ids]
         assert visible.any()
         return x[visible].ravel()*1000./math.sqrt(visible.sum())
+    def response(w, parameters, y0):
+        nonlocal cache_hits, branch_runs
+        # Only exact physical parameter matches within this generation call.
+        # Window identity includes its immutable state, observation mask and
+        # projection. Never reuse the nominal or independent repeat rollout.
+        key = (w['start'],w['end'],w['index'],tuple(sorted(parameters.items())))
+        if cache_enabled and key in branch_cache:
+            cache_hits += 1
+            return branch_cache[key]
+        runtime.restore(snapshots[w['start']],parameters)
+        check = runtime.advance(w['end'])
+        branch_runs += 1
+        result = (bool(check['valid']),vector(w) if check['valid'] else np.full_like(y0,np.nan))
+        if cache_enabled:
+            branch_cache[key] = result
+        return result
     records=[]
     for qi,q in enumerate(spec['workpoints']):
         work=parameters(q);coarse=[];fine=[];physical=[];base_vectors=[];window_info=[]
@@ -82,15 +107,15 @@ def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_ob
             if not check['valid']:
                 raise RuntimeError(f'Invalid nominal query {qi} at frame {w["end"]}: {check}')
             y0=vector(w);nominal=runtime.state_hashes();base_vectors.append(y0)
-            columns=[];ok=np.ones(4,bool)
+            columns=[];ok=np.ones(dimensions,bool)
             for radius in spec['radii']:
                 js=[]
-                for j in range(4):
+                for j in range(dimensions):
                     responses=[];offsets=[]
                     for sign in [-1,1]:
                         v=np.array(q);v[j]+=sign*radius;p=parameters(v)
-                        runtime.restore(snap,p);check=runtime.advance(w['end']);ok[j]&=check['valid']
-                        responses.append(vector(w) if check['valid'] else np.full_like(y0,np.nan))
+                        good,y=response(w,p,y0);ok[j]&=good
+                        responses.append(y)
                         offsets.append(abs(coordinate(p)[j]-coordinate(work)[j]))
                     col,_=central_column(y0,responses[1],responses[0],offsets[1],offsets[0]);js.append(col)
                 columns.append(np.stack(js,axis=1))
@@ -116,8 +141,8 @@ def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_ob
                         responses=[];offsets=[]
                         for sign in [-1,1]:
                             v=np.array(q);v[j]+=sign*radius;p=parameters(v)
-                            runtime.restore(snapshots[w['start']],p);check=runtime.advance(w['end']);ok &= check['valid']
-                            responses.append(vector(w) if check['valid'] else np.full_like(base_vectors[wi],np.nan))
+                            good,y=response(w,p,base_vectors[wi]);ok &= good
+                            responses.append(y)
                             offsets.append(abs(coordinate(p)[j]-coordinate(work)[j]))
                         col,_=central_column(base_vectors[wi],responses[1],responses[0],offsets[1],offsets[0]);pieces.append(np.sqrt(w['weight'])*col)
                     cols.append(np.concatenate(pieces))
@@ -133,6 +158,11 @@ def generate(runtime, data, meta, space, spec, phase_weights, output, nominal_ob
             refined_axes=refined,path=path.name,sha256=sha(path),windows=window_info)
         records.append(row);write(out/'progress.json',clean(dict(workpoints=records,completed=len(records),total=len(spec['workpoints']))))
         print('TEACHER_POINT',qi,audit['S'],audit['valid'],flush=True)
+    if timings is not None:
+        timings.update(nominal_seconds=nominal_finished-started,
+                       sensitivity_seconds=time.perf_counter()-nominal_finished,
+                       perturbation_rollouts=branch_runs,reused_perturbation_rollouts=cache_hits,
+                       independent_nominal_repeats=len(windows)*len(spec['workpoints']))
     return records
 
 def main():

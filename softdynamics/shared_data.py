@@ -62,8 +62,11 @@ def select_release(source, corrected, config, output):
 def read_splat(source, dest):
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(source/'splatfacto.tar') as archive:
-            dest.write_bytes(archive.extractfile('splatfacto/splat_0.ply').read())
+        if (source/'splat_0.ply').exists():
+            dest.symlink_to((source/'splat_0.ply').resolve())
+        else:
+            with tarfile.open(source/'splatfacto.tar') as archive:
+                dest.write_bytes(archive.extractfile('splatfacto/splat_0.ply').read())
     return dest
 
 
@@ -78,7 +81,8 @@ def carve_initial(source, cameras, splat, load_gaussians, output):
     high = surface.max(0)
     sizes = np.ceil((high-low)/spacing).astype(int)+1
     if np.prod(sizes) > 8_000_000:
-        raise ValueError(f'Initial Gaussian bounds exceed carve budget: {sizes.tolist()}')
+        from .teacher50_geometry import carve_large
+        return carve_large(source,cameras,splat,load_gaussians,output)
     voxels = np.stack(np.meshgrid(*[np.arange(low[k], high[k]+spacing, spacing)
                                    for k in range(3)], indexing='ij'), -1).reshape(-1, 3)
     inside = np.ones(len(voxels), bool)
@@ -106,15 +110,26 @@ def carve_initial(source, cameras, splat, load_gaussians, output):
             used.append(str(name))
     voxels = voxels[(visible >= 5) & (support/np.maximum(visible, 1) >= .85)]
     axis_cells = np.ptp(voxels,axis=0)/spacing if len(voxels) else np.zeros(3)
-    if len(voxels) < 512 or np.min(axis_cells) < 3:
-        raise ValueError(f'Insufficient resolved first-frame volume: {len(voxels)}, axis cells {axis_cells.tolist()}')
+    if not len(voxels):
+        raise ValueError('No occupied first-frame voxels')
     np.savez_compressed(output, positions=voxels.astype(np.float32))
     return dict(source_frame=0, voxel_spacing_m=spacing, particles=len(voxels),
                 cameras=used, silhouette_support=.85, mask_dilation_pixels=2,
-                future_geometry_used=False, camera_calibration_id=str(cameras['camera_calibration_id']))
+                future_geometry_used=False, camera_calibration_id=str(cameras['camera_calibration_id']),
+                coarse_axis_cells=axis_cells.tolist(),low_coarse_voxel_count=len(voxels)<512)
 
 
-def build_canonical(workspace, obj, reference, source, corrected, runtime):
+def voxel_particle_quadrature(coarse,spacing=.003,minimum_particles=4096):
+    """Refine quadrature within the SAME occupied cubes, preserving their volume."""
+    if not len(coarse):raise ValueError('No occupied first-frame voxels')
+    subdivisions=max(2,int(np.ceil((minimum_particles/len(coarse))**(1/3))))
+    axis=(np.arange(subdivisions)+.5)/subdivisions*spacing-spacing/2
+    offsets=np.stack(np.meshgrid(axis,axis,axis,indexing='ij'),-1).reshape(-1,3)
+    points=(coarse[:,None]+offsets[None]).reshape(-1,3).astype(np.float32)
+    return points,(spacing/subdivisions)**3,subdivisions
+
+
+def build_canonical(workspace, obj, reference, source, corrected, runtime, reconstruction_method=None):
     original, load_gaussians, transform_gaussians, PhysicalAsset, farthest = runtime_imports(runtime)
     asset_dir = workspace/'asset'
     if (asset_dir/'asset.json').exists():
@@ -128,18 +143,22 @@ def build_canonical(workspace, obj, reference, source, corrected, runtime):
     splat = read_splat(src, prepared/'splat_0.ply')
     cams = load_npz(corrected/'finger_data/cameras'/obj/f'episode_{reference}'/'cameras.npz')
     carve_path = prepared/'first-frame-volume.npz'
-    evidence = carve_initial(src, cams, splat, load_gaussians, carve_path)
+    if reconstruction_method is None:
+        evidence = carve_initial(src, cams, splat, load_gaussians, carve_path)
+    else:
+        from .teacher50_geometry import carve_consensus,CONSENSUS_METHOD
+        if reconstruction_method!=CONSENSUS_METHOD:raise ValueError('Unknown initialization reconstruction')
+        evidence=carve_consensus(src,cams,carve_path)
     coarse = load_npz(carve_path)['positions']
-    axis = (np.arange(2)+.5)/2*.003-.0015
-    offsets = np.stack(np.meshgrid(axis, axis, axis, indexing='ij'), -1).reshape(-1, 3)
-    points = (coarse[:, None]+offsets[None]).reshape(-1, 3).astype(np.float32)
+    points,particle_volume,subdivisions=voxel_particle_quadrature(coarse)
     points = points[points[:, 1] >= -.0115]
+    if not len(points):raise ValueError('No physical particles remain above the existing ground cutoff')
     # Conservative state/sorting estimate. Grid allocation is separately bounded.
     if len(points)*1024 > 8*1024**3:
         raise ValueError(f'Estimated particle state exceeds 8 GiB: {len(points)} particles')
     origin = points.astype(float).mean(0)
     rest = (points-origin).astype(np.float32)
-    volumes = np.full(len(rest), .0015**3)
+    volumes = np.full(len(rest),particle_volume)
     masses = volumes*100.
     mesh, boundary = original.canonical_mesh(rest.astype(float))
     mesh.export(asset_dir/'rest_surface.ply')
@@ -165,7 +184,8 @@ def build_canonical(workspace, obj, reference, source, corrected, runtime):
                particles=len(rest), total_mass_kg=float(masses.sum()),
                material=dict(model='fixed corotated elastic', density_kg_m3=100., physical_ground_truth=False),
                ground_y_world_m=-.01, ground_height_independently_calibrated=False,
-               rest_shape_assumed_stress_free=True, numerical_particle_spacing_m=.0015,
+               rest_shape_assumed_stress_free=True, numerical_particle_spacing_m=.003/subdivisions,
+               particle_quadrature_subdivisions=subdivisions,occupied_coarse_voxels=len(coarse),
                initial_reconstruction=evidence, shared_across_episodes=True,
                payload_sha256={n:sha256(asset_dir/n) for n in ['body.npz','appearance.npz','appearance_binding.npz','rest_surface.ply']},
                source_sha256=dict(splat=sha256(splat), cameras=sha256(corrected/'finger_data/cameras'/obj/f'episode_{reference}'/'cameras.npz'))))

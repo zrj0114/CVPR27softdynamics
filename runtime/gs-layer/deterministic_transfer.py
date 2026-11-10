@@ -9,6 +9,7 @@ expressions. Constitutive, contact impulse, ground and G2P kernels are reused.
 This is a forward evaluator for the existing derivative-free identification;
 sorting/gather topology is not an implementation of the solver's adjoint.
 """
+import os
 import warp as wp
 from warp.utils import radix_sort_pairs
 from material_contact_kernels import MPMStateStruct, MPMModelStruct, MaterialContact, scatter_material_velocity
@@ -17,6 +18,7 @@ from mpm_utils import (zero_grid, compute_stress_from_F_trial, compute_dweight,
                        g2p_differentiable)
 
 wp.set_module_options({'enable_backward': False, 'max_unroll': 1})
+ACTIVE_INDEX_THREADS = 32768
 
 
 @wp.struct
@@ -124,6 +126,17 @@ def gather_p2g(state: MPMStateStruct, model: MPMModelStruct, dt: float, index: C
         state.grid_m[x,y,z]=total[3]
 
 
+@wp.kernel
+def reset_used_index(index: CellIndex):
+    # Every occupied base cell is also its own (0,0,0) support node, so
+    # clearing the previous support union resets ALL previously written
+    # begin entries and marks. end is read only when begin is nonnegative.
+    for slot in range(wp.tid(),index.count[0],ACTIVE_INDEX_THREADS):
+        node=index.nodes[slot]
+        index.begin[node]=-1
+        index.marked[node]=0
+
+
 @wp.func
 def contact_mass_contribution(state: MPMStateStruct, c: MaterialContact,
                               p: int, i: int, j: int, k: int):
@@ -188,16 +201,36 @@ class DeterministicTransfer:
         index.count=wp.zeros(1,dtype=int,device=device)
         index.invalid=wp.zeros(1,dtype=int,device=device)
         self.index=index
+        self.active_grid = os.environ.get('SOFTDYNAMICS_ACTIVE_GRID', '0') == '1'
+        self.sparse_index_reset = os.environ.get('SOFTDYNAMICS_SPARSE_INDEX_RESET','0') == '1'
+        self.active_p2g = os.environ.get('SOFTDYNAMICS_ACTIVE_P2G','0') == '1'
+        self._index_initialized = False
+        self.p2g_threads = max(512*256,((n+255)//256)*256)
+        self._active_kernels = None
 
     def prepare(self,state,model):
         index=self.index
-        index.begin.fill_(-1); index.marked.zero_(); index.count.zero_()
+        if self.active_grid and self.sparse_index_reset and self._index_initialized:
+            wp.launch(reset_used_index,dim=ACTIVE_INDEX_THREADS,inputs=[index],device=self.device)
+        else:
+            index.begin.fill_(-1); index.marked.zero_()
+        # Reset count only after consuming the previous list. Restore leaves
+        # that list intact, so jumps to older snapshots are handled identically.
+        index.count.zero_()
         wp.launch(particle_keys,dim=index.n,inputs=[state,model,index],device=self.device)
         radix_sort_pairs(index.keys,index.ids,index.n)
         wp.launch(cell_ranges_and_nodes,dim=index.n,inputs=[index],device=self.device)
+        self._index_initialized = True
 
     def p2g(self,state,model,dt):
-        wp.launch(gather_p2g,dim=self.index.nodes.size,inputs=[state,model,dt,self.index],device=self.device)
+        if self.active_grid and self.active_p2g:
+            # Warp's native grid-stride launch still visits the entire logical
+            # capacity. Limit physical CUDA blocks, keeping the original kernel
+            # and its per-node register lifetime and accumulation order intact.
+            wp.launch(gather_p2g,dim=self.index.nodes.size,inputs=[state,model,dt,self.index],
+                      device=self.device,max_blocks=self.p2g_threads//256)
+        else:
+            wp.launch(gather_p2g,dim=self.index.nodes.size,inputs=[state,model,dt,self.index],device=self.device)
 
     def contact(self,t,dt,state,c):
         wp.launch(gather_contact,dim=self.index.nodes.size,inputs=[t,dt,state,c,self.index],device=self.device)
@@ -205,8 +238,18 @@ class DeterministicTransfer:
     def check(self):
         if self.index.invalid.numpy()[0]:
             raise RuntimeError('Particle stencil outside allocated grid in deterministic transfer')
+        if self.active_grid and self.active_p2g:
+            # One scalar read per VIDEO FRAME, never per physical substep.
+            # The striding kernel still covers every node if occupancy grows
+            # before the next update; this value affects scheduling only.
+            count=int(self.index.count.numpy()[0])
+            # Four times the previous occupancy preserves parallelism and avoids
+            # the measured regression from an excessively small block cap.
+            self.p2g_threads=max(512*256,4*((count+255)//256)*256)
 
     def step(self,solver,model,state,next_state,dt):
+        if self.active_grid:
+            return self.active_step(solver,model,state,next_state,dt)
         if solver.particle_velocity_modifiers or any(k is not scatter_material_velocity for k in solver.pre_p2g_operations):
             raise ValueError('This forward transfer adapter only supports the existing material-contact pipeline')
         grid=(model.grid_dim_x,model.grid_dim_y,model.grid_dim_z)
@@ -223,4 +266,37 @@ class DeterministicTransfer:
             wp.launch(kernel,dim=grid,inputs=[solver.time,dt,state,model,solver.collider_params[k]],device=device)
             if solver.modify_bc[k] is not None:solver.modify_bc[k](solver.time,dt,solver.collider_params[k])
         wp.launch(g2p_differentiable,dim=model.n_particles,inputs=[state,next_state,model,dt],device=device)
+        solver.time+=dt
+
+    def active_step(self,solver,model,state,next_state,dt):
+        # Only the selected finite-pad pipeline has been audited for this path.
+        # Other upstream contact pipelines retain the dense implementation.
+        if self._active_kernels is None:
+            from pad_contact_kernels import accumulate_pad_contact
+            from material_contact_kernels import material_grid_boundary
+            import active_grid_kernels as active
+            if (solver.particle_velocity_modifiers or solver.pre_p2g_operations or
+                    solver.impulse_params or any(bc is not None for bc in solver.modify_bc) or
+                    any(k not in (accumulate_pad_contact,material_grid_boundary)
+                        for k in solver.grid_postprocess) or
+                    not solver.grid_postprocess or solver.grid_postprocess[-1] is not material_grid_boundary):
+                self.active_grid = False
+                return self.step(solver,model,state,next_state,dt)
+            self._active_kernels = (active, {
+                accumulate_pad_contact: active.active_accumulate_pad_contact,
+                material_grid_boundary: active.active_material_grid_boundary})
+        active,kernels = self._active_kernels
+        self.prepare(state,model)
+        args=[self.index.nodes,self.index.count,self.index.grid]
+        def launch(kernel,inputs):
+            wp.launch(kernel,dim=active.ACTIVE_THREADS,inputs=inputs+args,device=self.device)
+        launch(active.active_zero_grid,[state,model])
+        wp.launch(compute_stress_from_F_trial,dim=model.n_particles,inputs=[state,model,dt],device=self.device)
+        self.p2g(state,model,dt)
+        launch(active.active_grid_normalization_and_gravity,[state,model,dt])
+        if model.grid_v_damping_scale<1.:
+            launch(active.active_add_damping_via_grid,[state,model.grid_v_damping_scale])
+        for k,kernel in enumerate(solver.grid_postprocess):
+            launch(kernels[kernel],[solver.time,dt,state,model,solver.collider_params[k]])
+        wp.launch(g2p_differentiable,dim=model.n_particles,inputs=[state,next_state,model,dt],device=self.device)
         solver.time+=dt

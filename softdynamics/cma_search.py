@@ -26,13 +26,17 @@ def weighted_loss(losses, confidence):
 
 
 class BlockCMA:
-    def __init__(self, start, confidence, seed=9101, cycles=2, block_generations=3, population=4, sigma=.2):
+    def __init__(self, start, confidence, seed=9101, cycles=2, block_generations=3, population=4, sigma=.2,
+                 active_parameters=PARAMETERS):
         self.current = np.asarray(start, float).copy()
         self.confidence = np.asarray(confidence, float).copy()
+        if not active_parameters or len(set(active_parameters))!=len(active_parameters):
+            raise ValueError('CMA parameters must be nonempty and unique')
+        self.active_indices=tuple(PARAMETERS.index(p) for p in active_parameters)
         if self.current.shape != (4,) or np.any(abs(self.current) > .025):
             raise ValueError('Start outside the frozen local bounds')
-        if self.confidence.ndim != 2 or self.confidence.shape[1] != 4 or not np.isfinite(self.confidence).all() or (self.confidence < 0).any():
-            raise ValueError('Expected confidence[episode,4]')
+        if self.confidence.ndim != 2 or self.confidence.shape[1] != len(self.active_indices) or not np.isfinite(self.confidence).all() or (self.confidence < 0).any():
+            raise ValueError('Expected confidence[episode,active parameters]')
         if min(cycles, block_generations) < 1 or population < 4 or sigma <= 0:
             raise ValueError('Invalid CMA budget')
         self.seed, self.cycles = seed, cycles
@@ -42,8 +46,13 @@ class BlockCMA:
         self.es = None
 
     @property
+    def parameter_indices(self):
+        # Preserve compatibility with the original four-parameter pickles.
+        return getattr(self,'active_indices',(0,1,2,3))
+
+    @property
     def done(self):
-        return self.block >= self.cycles * 4
+        return self.block >= self.cycles * len(self.parameter_indices)
 
     def ask(self):
         import cma
@@ -51,7 +60,7 @@ class BlockCMA:
             return None
         if self.pending is not None:
             return self.pending
-        j = self.block % 4
+        j = self.parameter_indices[self.block % len(self.parameter_indices)]
         if self.es is None:
             self.anchor = self.current.copy()
             self.best_q, self.best_cost = self.anchor.copy(), np.inf
@@ -76,12 +85,13 @@ class BlockCMA:
     def tell(self, candidate_losses, incumbent_losses):
         if self.pending is None:
             raise ValueError('ask() must precede tell()')
-        p, j = self.pending, self.block % 4
+        p, column = self.pending, self.block % len(self.parameter_indices)
+        j=self.parameter_indices[column]
         losses = np.asarray(candidate_losses, float)
         if losses.shape != (self.population,len(self.confidence)):
             raise ValueError('One complete support loss vector per CMA candidate is required')
-        costs = np.array([weighted_loss(row,self.confidence[:,j]) for row in losses])
-        old_cost = weighted_loss(incumbent_losses,self.confidence[:,j])
+        costs = np.array([weighted_loss(row,self.confidence[:,column]) for row in losses])
+        old_cost = weighted_loss(incumbent_losses,self.confidence[:,column])
         if old_cost < self.best_cost:
             self.best_cost = old_cost
         for q,cost in zip(p['q'],costs):
@@ -96,7 +106,7 @@ class BlockCMA:
         block_end = self.generation == self.block_generations
         if block_end:
             self.current = self.best_q.copy()
-        self.trace.append(dict(block=self.block,cycle=self.block//4,parameter=PARAMETERS[j],
+        self.trace.append(dict(block=self.block,cycle=self.block//len(self.parameter_indices),parameter=PARAMETERS[j],
             generation=self.generation, q=p['q'], costs_mm=costs, support_losses_mm=losses,
             incumbent_q=p['incumbent'],incumbent_cost_mm=old_cost, best_q=self.best_q.copy(),
             best_cost_mm=self.best_cost,current_q=self.current.copy(),block_complete=block_end,

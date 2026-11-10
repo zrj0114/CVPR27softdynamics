@@ -35,6 +35,9 @@ softdynamics-recovery-report = "softdynamics.recovery_report:main"
 softdynamics-recovery-efficiency = "softdynamics.recovery_efficiency:main"
 softdynamics-cma = "softdynamics.cma_benchmark:main"
 softdynamics-evaluate = "softdynamics.render_evaluation:main"
+softdynamics-world-data = "softdynamics.world_data:main"
+softdynamics-world-train = "softdynamics.world_training:main"
+softdynamics-world-predict = "softdynamics.world_inference:main"
 
 [tool.setuptools.packages.find]
 include = ["softdynamics*"]

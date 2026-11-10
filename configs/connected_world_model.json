@@ -1,0 +1,25 @@
+{
+  "base_commit": "fbbe79625e52892a12fb3cfeb8463adfb802532c",
+  "object": "048-butter-sponge",
+  "method": "learned",
+  "context": "real_start0",
+  "budget": 96,
+  "nodes": 384,
+  "surface_fraction": 0.75,
+  "neighbors": 12,
+  "translation_amplitude_m": 0.004,
+  "train_variants": ["nominal", "translate_positive", "translate_negative"],
+  "evaluation_variants": ["nominal", "translate_positive", "translate_negative"],
+  "validation_rule": "largest_support_episode",
+  "model": {"hidden": 96, "layers": 2, "position_update": "velocity_consistent"},
+  "ablations": {
+    "connected_short": {"position_update": "independent", "horizon": 8, "steps": 4000},
+    "connected_long": {"position_update": "velocity_consistent", "horizon": 32, "steps": 6000}
+  },
+  "training": {
+    "seed": 19, "steps": 6000, "batch_size": 4, "horizon": 32,
+    "learning_rate": 0.0003, "evaluate_every": 500, "validation_windows": 24
+  },
+  "evaluation_horizons": [1, 4, 8, 16, 32, 64],
+  "protocol": "Connect the published first contribution to a fixed-asset neural dynamics student. Object chosen for the most available fitting episodes, not query error. Validation is the largest fitting episode; test is the first contribution's untouched query episode. These are historically inspected development assets. No tactile input. Parameters and physics come only from the frozen learned CMA-ES selection."
+}

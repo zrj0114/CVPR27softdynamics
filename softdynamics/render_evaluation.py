@@ -132,7 +132,9 @@ def replay(root,plan,key,device):
     if shutil.disk_usage(root).free<nbytes+1024**3:raise RuntimeError('Insufficient evaluation output disk space')
     packed=np.lib.format.open_memmap(out/'gaussians.npy',mode='w+',dtype=np.float32,shape=(T,len(means0),9))
     space=ParameterSpace.from_config(original['config'])
-    sim=PadRuntime(case['episode'],space.parameters(case['q']),workspace,original['runtime'],entry['dtmax'],device,entry['domain_margin'])
+    from .shared_world_observation import padded_simulation_grid
+    with padded_simulation_grid(entry.get('grid_padding_cells',0),entry.get('grid_lower_cells')):
+        sim=PadRuntime(case['episode'],space.parameters(case['q']),workspace,original['runtime'],entry['dtmax'],device,entry['domain_margin'])
     cached=read_json(Path(case['trajectory'])/'complete.json')
     assert sim.source_hashes==cached['source_hashes']
     assert sim.domain==cached['domain'] and sim.dtmax==cached['dtmax']
@@ -196,7 +198,7 @@ def camera_source(root,plan,case,index):
     import cv2,h5py
     cameras=load_npz(case['camera_path']);name=str(cameras['camera_names'][index])
     original=read_json(Path(plan['run'])/'plan.json')
-    source=Path(original['source_data'])/case['object']/f'episode_{case["episode"]}'/'cameras.tar'
+    source=Path(original.get('source_data',plan.get('source_data')))/case['object']/f'episode_{case["episode"]}'/'cameras.tar'
     out=root/'reference'/case['object']/f'episode_{case["episode"]}'/name
     out.mkdir(parents=True,exist_ok=True)
     manifest=out/'source.json'
@@ -255,12 +257,19 @@ def render(root,plan,key,device,only_first=False):
                     rgb*=reference_mask[...,None]
                     target=torch.from_numpy(rgb.transpose(2,0,1).copy()).to(device)
                     prediction,alpha=renderer.render(packed[frame])
+                    script_profile=plan['protocol'].get('image_metric_profile')=='empm-script'
+                    if script_profile:
+                        # The upstream caller reads saved uint8 rendering PNGs.
+                        prediction=torch.round(prediction*255)/255
                     mse=float(torch.mean((prediction-target)**2))
                     alpha_np=alpha.cpu().numpy()
+                    lpips_standard=float(metric(prediction[None]*2-1,target[None]*2-1))
+                    lpips_value=float(metric(prediction[None],target[None])) if script_profile else lpips_standard
+                    mask=(np.rint(alpha_np*255)>0) if script_profile else (alpha_np>=.5)
                     row=dict(frame=frame,psnr_db=psnr_from_mse(mse),
                         perfect_rgb=bool(mse==0),ssim=float(ssim(prediction[None],target[None])),
-                        lpips=float(metric(prediction[None]*2-1,target[None]*2-1)),
-                        iou_percent=100*mask_iou(alpha_np>=.5,reference_mask),
+                        lpips=lpips_value,lpips_standard=lpips_standard,
+                        iou_percent=100*mask_iou(mask,reference_mask),
                         iou_nonzero_uint8_percent=100*mask_iou(np.rint(alpha_np*255)>0,reference_mask),
                         reference_mask_pixels=int(reference_mask.sum()),predicted_mask_pixels=int((alpha_np>=.5).sum()))
                     if frame==0:diagnostic=row
@@ -276,7 +285,7 @@ def render(root,plan,key,device,only_first=False):
                         return
         finally:cap.release()
         assert [r['frame'] for r in rows]==case['frames']
-        metric_names=['psnr_db','ssim','lpips','iou_percent','iou_nonzero_uint8_percent']
+        metric_names=['psnr_db','ssim','lpips','lpips_standard','iou_percent','iou_nonzero_uint8_percent']
         if any(r[k] is None or not np.isfinite(r[k]) for r in rows for k in metric_names):
             raise ValueError('Nonfinite metric requires explicit aggregation handling')
         result=dict(camera=name,index=index,frames=len(rows),source=source_info,
@@ -309,7 +318,7 @@ def report(root,plan):
     result=dict(updated_at=time.time(),status='complete' if rows and all(r['complete'] for r in rows) else 'partial',
         rows=rows,object_equal_macro=macro,unavailable=plan['unavailable'],protocol=plan['protocol'])
     write_json(root/'report.json',result)
-    columns=['object','episode','method','budget','dist_mm','track_mm','iou_percent','psnr_db','ssim','lpips','complete','completed_cameras','total_cameras','frames']
+    columns=['object','episode','split','method','budget','dist_mm','track_mm','iou_percent','psnr_db','ssim','lpips','complete','completed_cameras','total_cameras','frames']
     with (root/'metrics.csv').open('w',newline='') as f:
         writer=csv.DictWriter(f,fieldnames=columns,extrasaction='ignore');writer.writeheader();writer.writerows(rows)
     return result

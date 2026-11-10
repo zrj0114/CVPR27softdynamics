@@ -2,6 +2,7 @@
 import argparse
 import copy
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -31,6 +32,14 @@ def foreign_compute_gpus():
         except FileNotFoundError:continue
         if foreign:busy.add(mapping[uuid])
     return busy
+
+
+def occupied_compute_gpus():
+    """Require an unused device for runs that explicitly freeze that policy."""
+    rows=subprocess.check_output(['nvidia-smi','--query-gpu=index,uuid','--format=csv,noheader'],text=True)
+    mapping={r.split(',')[1].strip():int(r.split(',')[0]) for r in rows.strip().splitlines()}
+    apps=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid,pid','--format=csv,noheader'],text=True)
+    return {mapping[r.split(',')[0].strip()] for r in apps.strip().splitlines() if r.strip()}
 
 
 def snapshot_code(root, previous_plan):
@@ -141,8 +150,18 @@ def summary(root, unavailable=None):
             query_mm_delta=row['query_objective_mm']-base['query_objective_mm']
                 if row['query_valid'] and base['query_valid'] else None,
             uniform_query_valid=base['query_valid'],learned_query_valid=row['query_valid']))
+    assistance=[]
+    for row in rows:
+        if row['method']!='uniform':continue
+        base=lookup.get((row['object'],row['context'],row['budget'],'physical_uniform'))
+        if base is not None:
+            assistance.append(dict(object=row['object'],context=row['context'],budget=row['budget'],
+                world_uniform_query_mm=row['query_objective_mm'],physical_uniform_query_mm=base['query_objective_mm'],
+                query_mm_delta=row['query_objective_mm']-base['query_objective_mm']
+                    if row['query_valid'] and base['query_valid'] else None))
     write_json(root/'report.json',dict(updated_at=time.time(),completed_budget_evaluations=len(rows),
         paired=paired,rows=rows,numerically_unavailable=unavailable or {},
+        world_preselection_vs_physical_uniform=assistance,
         aggregation='Paired per context; object equal weighting required for aggregate claims.'))
     return len(rows)
 
@@ -185,19 +204,23 @@ def _supervise(root,gpus,score_workers=6):
     jobs=read_json(root/'jobs.json') if (root/'jobs.json').exists() else {};processes={};states={}
     for name in ['logs','results','selections','weights','search']: (root/name).mkdir(exist_ok=True)
     env=dict(os.environ,PYTHONPATH=str(repo),OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1',MKL_NUM_THREADS='1',NUMEXPR_NUM_THREADS='1')
-    def launch(key,kind,obj,episode=None,q=None,gpu=None):
+    def launch(key,kind,obj,episode=None,q=None,gpu=None,request=None,output=None):
         old=jobs.get(key,{})
         if old.get('status') in ['running','failed']:return False
         if old.get('attempt',0)>=2:
             old['status']='failed';jobs[key]=old;return False
-        command=[sys.executable,'-u','-m','softdynamics.cma_benchmark','--root',str(root),'--mode',kind,'--object',obj]
-        if episode is not None:command+=['--episode',str(episode),'--q',*map(str,q)]
+        if kind=='surrogate':
+            command=[sys.executable,'-u','-m','softdynamics.shared_world_cma','--request',str(request),'--output',str(output)]
+        else:
+            command=[sys.executable,'-u','-m','softdynamics.cma_benchmark','--root',str(root),'--mode',kind,'--object',obj]
+            if episode is not None:command+=['--episode',str(episode),'--q',*map(str,q)]
         worker_env=env.copy()
         if gpu is not None:worker_env['CUDA_VISIBLE_DEVICES']=str(gpu)
         log=root/'logs'/(key.replace('/','_')+'.log')
         with log.open('a') as stream:
             p=subprocess.Popen(command,cwd=repo,env=worker_env,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
-        jobs[key]=dict(pid=p.pid,status='running',kind=kind,gpu=gpu,command=command,log=str(log),
+        jobs[key]=dict(pid=p.pid,start_ticks=Path(f'/proc/{p.pid}/stat').read_text().split()[21],
+            status='running',kind=kind,gpu=gpu,command=command,log=str(log),
             started_at=time.time(),attempt=old.get('attempt',0)+1)
         processes[key]=p;write_json(root/'jobs.json',jobs)
         print('START',key,'GPU',gpu,'PID',p.pid,flush=True);return True
@@ -207,14 +230,15 @@ def _supervise(root,gpus,score_workers=6):
             if key in processes:
                 rc=processes[key].poll()
                 if rc is None:continue
-            elif alive(j['pid'],str(root)):continue
+            elif alive(j['pid'],str(root)) and (not j.get('start_ticks') or
+                Path(f'/proc/{j["pid"]}/stat').read_text().split()[21]==j['start_ticks']):continue
             else:rc=None
             j.update(status='exited',exit_code=rc,finished_at=time.time())
             print('EXIT',key,rc,flush=True)
         write_json(root/'jobs.json',jobs)
     ordered=sorted(plan['objects'],key=lambda o:sum(e['particles']*e['frames'] for e in o['episodes']))
     while True:
-        refresh();requests={};scoring={};weights_needed=[];progress={};total_done=0;unavailable={}
+        refresh();requests={};surrogates={};scoring={};weights_needed=[];progress={};total_done=0;unavailable={}
         def losses(item,q,condition,episodes,priority):
             result=[];ready=True
             for e in episodes:
@@ -247,11 +271,18 @@ def _supervise(root,gpus,score_workers=6):
                     checkpoint=root/'search'/obj/ctx['id']/(method+'.pkl');sid=str(checkpoint)
                     if sid not in states:
                         opt=plan['optimizer']
-                        states[sid]=BlockCMA.load(checkpoint) if checkpoint.exists() else BlockCMA(
-                            ctx['start'],ctx['weights'][method],opt['seed'],opt['cycles'],opt['block_generations'],opt['population'],opt['sigma'])
+                        assisted=method in plan.get('world_preselection',{}).get('methods',[])
+                        cls=BlockCMA
+                        kwargs={}
+                        if assisted:
+                            from .shared_world_cma import PreselectedBlockCMA
+                            cls=PreselectedBlockCMA
+                            kwargs['surrogate_population']=plan['world_preselection']['population']
+                        states[sid]=cls.load(checkpoint) if checkpoint.exists() else cls(
+                            ctx['start'],ctx['weights'][method],opt['seed'],opt['cycles'],opt['block_generations'],opt['population'],opt['sigma'],**kwargs)
                     state=states[sid]
                     # Evaluate every complete sweep before advancing to the next.
-                    milestone=state.logical_candidates>0 and state.logical_candidates%32==0
+                    milestone=state.logical_candidates in plan['optimizer']['budgets']
                     budget=state.logical_candidates
                     output=root/'results'/obj/ctx['id']/str(budget)/(method+'.json')
                     if milestone and not output.exists():
@@ -265,12 +296,15 @@ def _supervise(root,gpus,score_workers=6):
                             selected=state.current if accepted else np.array(ctx['start'])
                             chosen=dict(object=obj,context=ctx['id'],method=method,condition=cond,budget=budget,
                                 selected_q=selected,candidate_q=state.current,start=ctx['start'],accepted=accepted,
+                                support_initial_losses_mm=initial,support_candidate_losses_mm=current,
                                 support_initial_mm=float(initial.mean()) if initial_valid else None,
                                 support_candidate_mm=float(current.mean()) if valid else None,
                                 trace=state.trace,unique_candidate_vectors=len(state.seen),
                                 logical_episode_evaluations=budget*len(item['support']),
                                 episode_evaluations_including_start=(budget+1)*len(item['support']),
-                                selection_frozen_at=time.time(),query_observations_used=False)
+                                selection_frozen_at=time.time(),query_observations_used=False,
+                                surrogate_candidate_vectors=getattr(state,'surrogate_candidates',0),
+                                optimizer_fitness_source='Complete original physical-engine support simulations')
                             if cond['truth']!='real':
                                 truth=next(t['q'] for t in plan['config']['truths'] if t['name']==cond['truth'])
                                 error=abs(selected-np.array(truth))/.025
@@ -289,12 +323,53 @@ def _supervise(root,gpus,score_workers=6):
                         query=losses(item,chosen['selected_q'],condition_key(cond['truth']),item['query'],(rank,-1,context_no))
                         if query is None:continue
                         valid=bool(np.isfinite(query).all())
-                        chosen.update(query_valid=valid,query_objective_mm=float(query.mean()) if valid else None)
+                        chosen.update(query_valid=valid,query_objective_mm=float(query.mean()) if valid else None,
+                                      query_losses_mm=query)
+                        if plan.get('world_preselection'):
+                            raw=losses(item,chosen['candidate_q'],condition,item['query'],(rank,-1,context_no))
+                            baseline=losses(item,chosen['start'],condition,item['query'],(rank,-1,context_no))
+                            if raw is None or baseline is None:continue
+                            chosen.update(raw_query_losses_mm=raw,baseline_query_losses_mm=baseline,
+                                raw_query_objective_mm=float(raw.mean()) if np.isfinite(raw).all() else None,
+                                baseline_query_objective_mm=float(baseline.mean()) if np.isfinite(baseline).all() else None,
+                                query_scoring_started_after_selection=True,
+                                physical_reference_cost=plan['world_preselection']['reference_cost'],
+                                shared_cache_wall_time_is_not_method_speedup=True)
+                            logical_q=[chosen['start']]+[q for row in chosen['trace'] for q in row['q']]
+                            physical_seconds=sum(read_json(trajectory_folder(root,obj,e,q)/'complete.json')['elapsed_s']
+                                for q in logical_q for e in item['support'])
+                            chosen.update(physical_support_logical_seconds_including_start=physical_seconds,
+                                surrogate_logical_seconds=sum(row.get('preselection_provenance',{}).get('elapsed_s',0.)
+                                    for row in chosen['trace']),
+                                physical_timing_interpretation='Sum of recorded full-rollout times per logical request, including initial reference and failures; shared caches are charged to every using method. This is not independent method wall time.')
                         write_json(output,chosen)
                         print('RESULT',obj,ctx['id'],method,budget,chosen['query_objective_mm'],flush=True)
                     if state.done:done+=1;continue
                     p=state.ask();state.save(checkpoint)
                     priority=(rank,1+budget//32,context_no)
+                    if 'preselected' in p and not p['preselected']:
+                        settings=plan['world_preselection'];case=settings['objects'][obj]
+                        pool_hash=hashlib.sha256(np.asarray(p['pool_q'],dtype='<f8').tobytes()+
+                            settings['checkpoint_sha256'].encode()).hexdigest()
+                        request=root/'surrogate'/obj/pool_hash/'request.json'
+                        pool_output=request.with_name('result.json')
+                        if not request.exists():
+                            write_json(request,dict(object=obj,support=item['support'],pool_q=p['pool_q'],
+                                data_root=settings['data_root'],data_plan_sha256=settings['data_plan_sha256'],
+                                checkpoint=settings['checkpoint'],checkpoint_sha256=settings['checkpoint_sha256'],
+                                physical_reference=case['physical_reference'],
+                                physical_reference_sha256=case['physical_reference_sha256'],state_reference=case['state_reference'],
+                                window_horizon=settings['window_horizon'],batch_windows=settings['batch_windows'],
+                                benchmark_plan=str(root/'plan.json'),protocol_sha256=sha256(root/'plan.json'),query_observations_used=False))
+                        if not pool_output.exists():
+                            surrogates[f'{obj}/{pool_hash}']=(priority,obj,request,pool_output)
+                            continue
+                        record=read_json(pool_output)
+                        if record['request_sha256']!=sha256(request) or record['physical_fitness'] or record['query_observations_used']:
+                            raise ValueError('Changed or invalid surrogate result')
+                        state.preselect(np.asarray(record['support_losses_mm'],dtype=float),
+                            dict(result=str(pool_output),sha256=sha256(pool_output),elapsed_s=record['elapsed_s']))
+                        state.save(checkpoint);p=state.ask()
                     rows=[losses(item,q,condition,item['support'],priority) for q in p['q']]
                     incumbent=losses(item,p['incumbent'],condition,item['support'],priority)
                     if incumbent is None or any(row is None for row in rows):continue
@@ -302,7 +377,7 @@ def _supervise(root,gpus,score_workers=6):
                     write_json(checkpoint.with_suffix('.json'),dict(block=state.block,generation=state.generation,
                         candidate_vectors=state.logical_candidates,current_q=state.current,trace=state.trace))
                     print('TELL',obj,ctx['id'],method,state.logical_candidates,state.current,flush=True)
-            progress[obj]=dict(stage='complete' if done==len(contexts)*2 else 'search',completed=done,total=len(contexts)*2,
+            progress[obj]=dict(stage='complete' if done==len(contexts)*len(plan['methods']) else 'search',completed=done,total=len(contexts)*len(plan['methods']),
                 searches=[dict(context=c['id'],method=m,candidates=states[str(root/'search'/obj/c['id']/(m+'.pkl'))].logical_candidates)
                     for c in contexts for m in plan['methods']])
             total_done+=done
@@ -311,13 +386,17 @@ def _supervise(root,gpus,score_workers=6):
         # One worker per GPU. Idle service contexts with ample free memory can
         # coexist; busy foreign training jobs are left alone.
         foreign=foreign_compute_gpus()
-        available=[g for g in gpus if g not in used and g not in foreign and hardware[g][0]<20000 and hardware[g][1]<35]
+        occupied=occupied_compute_gpus() if plan.get('unused_gpu_required') else set()
+        available=[g for g in gpus if g not in used and g not in foreign and g not in occupied and hardware[g][0]<20000 and hardware[g][1]<35]
         disk=shutil.disk_usage(root).free
         if disk>10*1024**3:
+            for key,(_,obj,request,output) in sorted(surrogates.items(),key=lambda kv:kv[1][0]):
+                if not available:break
+                if launch('surrogate/'+key,'surrogate',obj,gpu=available[0],request=request,output=output):available.pop(0)
             for key,(_,obj,e,q) in sorted(requests.items(),key=lambda kv:kv[1][0]):
                 if not available:break
                 if launch('simulate/'+key,'simulate',obj,e,q,available[0]):available.pop(0)
-            cpu=sum(j['status']=='running' and j['kind']!='simulate' for j in jobs.values())
+            cpu=sum(j['status']=='running' and j['kind'] not in ['simulate','surrogate'] for j in jobs.values())
             for obj in weights_needed:
                 if cpu>=score_workers:break
                 if launch('weights/'+obj,'weights',obj):cpu+=1
@@ -332,7 +411,7 @@ def _supervise(root,gpus,score_workers=6):
         active_workers=[dict(key=k,**j) for k,j in jobs.items() if j['status']=='running']
         waiting=[]
         if disk<=10*1024**3:waiting.append('disk_free_below_10_GiB')
-        if requests and not available:waiting.append('no_available_gpu')
+        if (requests or surrogates) and not available:waiting.append('no_available_gpu')
         phase='running'
         if failed:phase='failed'
         elif total_done==expected-unavailable_searches:phase='complete_with_unavailable' if unavailable else 'complete'
@@ -341,7 +420,7 @@ def _supervise(root,gpus,score_workers=6):
             objects=progress,completed_searches=total_done,total_searches=expected,completed_budget_evaluations=completed,
             unavailable_searches=unavailable_searches,eligible_searches=expected-unavailable_searches,
             numerically_unavailable=unavailable,waiting_reasons=waiting,active_workers=active_workers,
-            requested_simulations=len(requests),requested_scoring=len(scoring),
+            requested_simulations=len(requests),requested_surrogate_pools=len(surrogates),requested_scoring=len(scoring),
             infrastructure_failures=failed,disk_free_gb=disk/1024**3,gpus=gpus,foreign_compute_gpus=sorted(foreign))
         write_json(root/'status.json',status);print('STATUS',total_done,'searches',completed,'evaluations',flush=True)
         if status['status'] in ['complete','complete_with_unavailable','failed']:return
