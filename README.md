@@ -1,8 +1,10 @@
 # CVPR27softdynamics
 
-当前版本：**材料条件化局部图 Transformer + 因果 GRU，联合学习连续动力学、材料响应和 E、ν 的联合敏感度矩阵**。本次更新日期为 **2026-11-10**，包含教师 B 接触、教师加速 v2，以及矩形网格和细网格数值修复。
+当前版本：**保留 MPM 教师训练的局部图 Transformer、因果 GRU 和 E、ν 联合敏感度头，新增由真实 GT 训练的逐步速度残差分支及联合 CMA-ES 校准**。本次代码更新日期为 **2026-11-11**。旧模型默认行为兼容；残差版本使用独立数据清单、训练入口和检查点。
 
-训练使用固定的 **2,985 条训练轨迹与 320 条验证轨迹**，280 条已完成测试轨迹不参与训练、校准或选模。新架构已通过真实数据的多步前向／反向检查，训练结果应以运行目录的状态与验证记录为准。
+残差从零初始化，以 m/s 限幅，每步校正运动量并反馈到下一步。第一阶段冻结基础模型和敏感度头，只更新残差。MPM 损失继续监督未校正分支，真实 GT 监督校正分支。完整接口与命令见 [真实 GT 残差校正](docs/real_residual_20261111.md)。当前实现是神经代理的残差扩展，保留原有 F/C 接口语义，没有新增 MPM 网格积分或硬接触保证。
+
+原 MPM 基础训练使用固定的 **2,985 条训练轨迹与 320 条验证轨迹**，280 条已完成测试轨迹不参与训练、校准或选模。下面的图和规模表描述保留的基础模型；残差效果须以新运行的真实 GT 验证结果为准。
 
 ```mermaid
 flowchart TD
@@ -70,6 +72,9 @@ print(sum(p.numel() for p in model.parameters()))
 | 网络接触作用范围 | `softdynamics/teacher_contact_support.py` |
 | 标签准备与生成 | `softdynamics/teacher50.py`、`elastic_data.py` |
 | 当前连续训练 | `softdynamics/coupled_world_train.py` |
+| 固定真实 GT、绑定与支持／留出划分 | `softdynamics/real_residual_data.py` |
+| 校正递推、可见性损失与残差正则 | `softdynamics/real_residual_objective.py` |
+| 冻结基础模型的残差训练、联合 CMA-ES | `softdynamics/real_residual_train.py` |
 | 共享骨干、因果记忆与联合头 | `shared_world_model.py`、`coupled_world_model.py` |
 | 数据快照、成对轨迹与局部响应 | `softdynamics/coupled_world_data.py` |
 | 连续验证与材料恢复诊断 | `softdynamics/coupled_world_validation.py` |
@@ -96,7 +101,7 @@ model.eval()
 # forecast(model.world, batch, geometry, gradients=True) 保留预测段内的材料梯度。
 ```
 
-新检查点使用独立 schema；旧 `elastic_world_search` 的单步检查点入口不适用。当前代码提供验证集短窗口参数拟合，完整真实交互搜索及原始 MPM 复演需另行执行与验证，不能从训练损失推断其效果。
+新检查点使用独立 schema；旧 `elastic_world_search` 的单步检查点入口不适用。原耦合版本提供验证集短窗口参数拟合；残差版本另提供完整真实支持交互上的联合 CMA-ES。原始 MPM 复演仍需单独执行与验证，不能从训练损失推断真实效果。
 
 数据、动作、标签、权重和集群连接配置由运行环境提供。本快照保留实验来源路径与哈希；迁移完整采集批次前须按 [发布说明](docs/release_20261110.md) 核对外部输入。
 

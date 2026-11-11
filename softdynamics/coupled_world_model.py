@@ -13,11 +13,15 @@ from .shared_world_model import SharedWorldModel, DT_REF, mlp, dynamics_loss
 
 def load_coupled(path, device='cpu'):
     bundle = torch.load(path, map_location='cpu', weights_only=False)
-    if bundle.get('schema') != 'softdynamics.coupled-temporal-checkpoint.v1':
+    if bundle.get('schema') not in ('softdynamics.coupled-temporal-checkpoint.v1',
+                                   'softdynamics.coupled-residual-checkpoint.v1'):
         raise ValueError('Expected a coupled temporal checkpoint')
+    if (bundle['schema']=='softdynamics.coupled-residual-checkpoint.v1') != (bundle.get('residual') is not None):
+        raise ValueError('Checkpoint schema and residual architecture disagree')
     coordinates = bundle['material_coordinates']
     model = CoupledWorld(bundle['architecture'], bundle['tau'], coordinates['reference_E_pa'],
-                         coordinates['reference_nu'], coordinates['nu_scale']).to(device)
+                         coordinates['reference_nu'], coordinates['nu_scale'],
+                         residual=bundle.get('residual')).to(device)
     model.load_state_dict(bundle['model'])
     return model, bundle
 
@@ -37,6 +41,9 @@ class TemporalWorld(SharedWorldModel):
         return self.memory(h.flatten(0, 1), memory.flatten(0, 1)).reshape_as(h)
 
     def forward(self, state, pads0, pads1, theta, geometry, dt, memory=None):
+        return self.base_step(state, pads0, pads1, theta, geometry, dt, memory)
+
+    def base_step(self, state, pads0, pads1, theta, geometry, dt, memory=None):
         h = self.encode(state, pads0, pads1, theta, geometry, dt)
         memory = self.remember(h, memory)
         velocity = self.output(h + .1 * memory) * self.velocity_scale
@@ -44,29 +51,69 @@ class TemporalWorld(SharedWorldModel):
         return torch.cat((position, velocity, state[..., 6:]), -1), memory
 
 
+class ResidualTemporalWorld(TemporalWorld):
+    """Bounded real-data correction; MPM teacher paths use base_step explicitly.
+
+    The base velocity channel is displacement / object scale per DT_REF,
+    NOT metres per second. Corrections are bounded in m/s before conversion.
+    F/C remain unused interface columns: this is a neural surrogate extension,
+    not an internal MPM grid correction or a hard contact solver.
+    """
+    def __init__(self, residual, **architecture):
+        super().__init__(**architecture)
+        maximum = float(residual['max_velocity_m_s'])
+        if not 0 < maximum <= 1 or int(residual['hidden']) < 1:
+            raise ValueError('Positive bounded residual velocity and hidden width required')
+        self.max_residual_velocity_m_s = maximum
+        width = architecture['hidden'] + 6
+        self.velocity_residual = nn.Sequential(nn.LayerNorm(width),
+            mlp(width, int(residual['hidden']), 3))
+        nn.init.zeros_(self.velocity_residual[-1][-1].weight)
+        nn.init.zeros_(self.velocity_residual[-1][-1].bias)
+
+    def step_with_correction(self, state, pads0, pads1, theta, geometry, dt, memory=None):
+        h = self.encode(state, pads0, pads1, theta, geometry, dt)
+        memory = self.remember(h, memory)
+        encoded = h + .1 * memory
+        base_velocity = self.output(encoded) * self.velocity_scale
+        features = torch.cat((encoded, base_velocity/self.velocity_scale,
+                              state[..., 3:6]/self.loss_scale[3:6]), -1)
+        correction = self.max_residual_velocity_m_s * self.velocity_residual(features).tanh()
+        if 'node_valid' in geometry:
+            correction = correction * geometry['node_valid'][..., None]
+        scale = geometry['scale_m'][:, None, None]
+        velocity = base_velocity + correction * DT_REF / scale
+        position = state[..., :3] + velocity * (dt/DT_REF)[:, None, None]
+        return torch.cat((position, velocity, state[..., 6:]), -1), memory, correction
+
+    def forward(self, state, pads0, pads1, theta, geometry, dt, memory=None):
+        state, memory, _ = self.step_with_correction(state, pads0, pads1, theta, geometry, dt, memory)
+        return state, memory
+
+
 def call_step(world, args, gradients):
     return checkpoint(world, *args, use_reentrant=False, preserve_rng_state=False) if gradients else world(*args)
 
 
-def burn_history(world, history, theta, geometry, gradients):
+def burn_history(world, history, theta, geometry, gradients, corrected=True):
     memory = None
     for i in range(history['states'].shape[1]):
         args = (history['states'][:, i], history['pads0'][:, i], history['pads1'][:, i],
                 theta, geometry, history['dt'][:, i], memory)
-        _, updated = call_step(world, args, gradients)
+        _, updated = call_step(world if corrected else world.base_step, args, gradients)
         previous = torch.zeros_like(updated) if memory is None else memory
         memory = torch.where(history['present'][:, i, None, None], updated, previous)
     return memory
 
 
-def forecast(world, batch, geometry, gradients=True, tail_gradient=None):
+def forecast(world, batch, geometry, gradients=True, tail_gradient=None, corrected=True):
     """Only the initial state/history are observations. All later states recur.
 
 For long paired prefixes, tail_gradient limits weight backpropagation, while
 the entire prefix still runs from frame zero without teacher-state resets.
 Inference defaults to a full parameter-gradient path.
 """
-    memory = burn_history(world, batch['history'], batch['theta'], geometry, gradients)
+    memory = burn_history(world, batch['history'], batch['theta'], geometry, gradients, corrected)
     state = batch['states'][:, 0]
     predictions = []
     horizon = batch['pads'].shape[1] - 1
@@ -77,7 +124,7 @@ Inference defaults to a full parameter-gradient path.
             state = state.detach()
             memory = memory.detach()
         with torch.set_grad_enabled(active):
-            state, memory = call_step(world, (state, batch['pads'][:, t], batch['pads'][:, t+1],
+            state, memory = call_step(world if corrected else world.base_step, (state, batch['pads'][:, t], batch['pads'][:, t+1],
                 batch['theta'], geometry, batch['times'][:, t+1]-batch['times'][:, t], memory), active)
         predictions.append(state)
     return torch.stack(predictions, 1)
@@ -93,9 +140,11 @@ def response_summary(jacobian, tau):
 
 
 class CoupledWorld(nn.Module):
-    def __init__(self, architecture, tau, reference_E=3500., reference_nu=.27, nu_scale=.2):
+    def __init__(self, architecture, tau, reference_E=3500., reference_nu=.27, nu_scale=.2, residual=None):
         super().__init__()
-        self.world = TemporalWorld(**architecture)
+        self.residual_config = dict(residual) if residual is not None else None
+        self.world = (TemporalWorld(**architecture) if residual is None else
+                      ResidualTemporalWorld(residual, **architecture))
         hidden = architecture['hidden']
         self.time_encoder = mlp(5, 32, 16)
         self.sequence = nn.GRUCell(2*hidden + 16, 128)
@@ -141,7 +190,7 @@ class CoupledWorld(nn.Module):
         # The prefix represents the nominal physical snapshot and is held
         # fixed across all parameter probes, matching teacher.restore().
         memory = burn_history(self.world, context['history'], context['base_theta'],
-                              context['geometry'], self.training)
+                              context['geometry'], self.training, corrected=False)
         columns = []
         for j in range(2):
             delta = torch.zeros_like(q)
@@ -149,7 +198,7 @@ class CoupledWorld(nn.Module):
             predictions = []
             for sign in (-1, 1):
                 theta = self.theta(q + sign*delta).expand(len(context['states']), -1)
-                state, _ = call_step(self.world, (context['states'], context['pads0'], context['pads1'],
+                state, _ = call_step(self.world.base_step, (context['states'], context['pads0'], context['pads1'],
                     theta, context['geometry'], context['dt'], memory), self.training)
                 predictions.append(state[..., :3])
             response = (predictions[1]-predictions[0])/(2*radii[j])
@@ -158,7 +207,8 @@ class CoupledWorld(nn.Module):
         return torch.stack(columns, -1)
 
     def forward(self, batch, geometry, auxiliary, pair=None, local_response=False, pair_tail=16):
-        predicted = forecast(self.world, batch, geometry, self.training)
+        # Teacher labels describe the uncorrected MPM surrogate and sensitivity.
+        predicted = forecast(self.world, batch, geometry, self.training, corrected=False)
         target = batch['states'][:, 1:]
         local = dynamics_loss(predicted, target, self.world, geometry['scale_m'])
         first = dynamics_loss(predicted[:, :1], target[:, :1], self.world, geometry['scale_m'])
@@ -181,7 +231,7 @@ class CoupledWorld(nn.Module):
         absolute = response = local*0
         if pair is not None:
             pb, pg = pair
-            pp = forecast(self.world, pb, pg, self.training, tail_gradient=pair_tail)
+            pp = forecast(self.world, pb, pg, self.training, tail_gradient=pair_tail, corrected=False)
             pp, pt = pp[:, -pair_tail:], pb['states'][:, 1:][:, -pair_tail:]
             absolute = dynamics_loss(pp, pt, self.world, pg['scale_m'])
             actual = (pt[1, ..., :3]-pt[0, ..., :3])*pg['scale_m'][0]

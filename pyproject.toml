@@ -38,6 +38,8 @@ softdynamics-evaluate = "softdynamics.render_evaluation:main"
 softdynamics-world-data = "softdynamics.world_data:main"
 softdynamics-world-train = "softdynamics.world_training:main"
 softdynamics-world-predict = "softdynamics.world_inference:main"
+softdynamics-real-residual-data = "softdynamics.real_residual_data:main"
+softdynamics-real-residual = "softdynamics.real_residual_train:main"
 
 [tool.setuptools.packages.find]
 include = ["softdynamics*"]

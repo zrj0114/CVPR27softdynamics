@@ -1,0 +1,47 @@
+{
+  "date": "2026-11-11",
+  "cpu_tests": {
+    "tests": 302,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "base_step": 16500,
+  "base_sha256": "86ae2ae4a28bae97bc9cb294306967bcea16d347d0449d401fc943518ea65c48",
+  "residual_parameters": 34575,
+  "total_parameters": 3667189,
+  "gpu_zero_equivalence": [
+    {
+      "object": "088-snake",
+      "frames": 32,
+      "max_abs_difference": 0.0
+    },
+    {
+      "object": "121-croissant-plush",
+      "frames": 32,
+      "max_abs_difference": 0.0
+    }
+  ],
+  "disposable_gradient_check": {
+    "updates": 3,
+    "all_gradients_finite": true,
+    "base_and_sensitivity_unchanged": true
+  },
+  "cma_interface_check": {
+    "object": "121-croissant-plush",
+    "candidates": 4,
+    "support_episodes": [
+      0,
+      1,
+      2
+    ],
+    "query_used": false,
+    "failures": 0,
+    "initial_objective_mm": 12.637932777404785,
+    "objective_mm": 12.637932777404785
+  },
+  "original_training_status": "paused",
+  "original_training_step": 17089,
+  "residual_training_started": false,
+  "scope": "Code and interface verification only; no claim of held-out prediction improvement"
+}
